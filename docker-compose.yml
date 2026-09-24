@@ -19,6 +19,7 @@ services:
     restart: unless-stopped
 
   migrate:
+    image: kaspi-repricer-backend:local
     build: .
     command: alembic upgrade head
     environment:
@@ -29,6 +30,7 @@ services:
     restart: "no"
 
   api:
+    image: kaspi-repricer-backend:local
     build: .
     command: uvicorn repricer.api.app:app --host 0.0.0.0 --port 8000
     environment:
@@ -40,6 +42,7 @@ services:
     restart: unless-stopped
 
   worker:
+    image: kaspi-repricer-backend:local
     build: .
     command: repricer
     environment:
@@ -53,6 +56,7 @@ services:
     restart: unless-stopped
 
   bot:
+    image: kaspi-repricer-backend:local
     build: .
     command: repricer-bot
     environment:
