@@ -21,10 +21,14 @@ import json
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
+from collections.abc import Callable
 from typing import Protocol
 
 from curl_cffi import requests as curl_requests
 from loguru import logger
+from sqlalchemy.orm import Session
+
+from repricer.telegram.subscriptions import subscriber_chat_ids
 
 TELEGRAM_API = "https://api.telegram.org"
 
@@ -100,6 +104,27 @@ class TelegramSink:
         if response.status_code != 200:
             body = json.loads(response.content or b"{}").get("description", response.status_code)
             logger.warning("Telegram refused the alert: {}", body)
+
+
+class BroadcastTelegramSink:
+    """Send the same committed price update to every /start subscriber."""
+
+    def __init__(
+        self, token: str, merchant_id: str, session_factory: Callable[[], Session]
+    ) -> None:
+        self._token = token
+        self._merchant_id = merchant_id
+        self._session_factory = session_factory
+
+    def send(self, text: str) -> None:
+        try:
+            with self._session_factory() as session:
+                chat_ids = subscriber_chat_ids(session, self._merchant_id)
+        except Exception as exc:  # noqa: BLE001 - notification failure must not fail a price cycle
+            logger.warning("Could not load Telegram subscribers: {}", exc)
+            return
+        for chat_id in chat_ids:
+            TelegramSink(self._token, chat_id).send(text)
 
 
 class LoggingSink:

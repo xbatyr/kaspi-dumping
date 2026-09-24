@@ -19,7 +19,6 @@ export function SettingsForm({ settings }: { settings: Settings }) {
   const [enabled, setEnabled] = useState(settings.worker_enabled);
   const [interval, setInterval] = useState(String(settings.interval_seconds));
   const [requestInterval, setRequestInterval] = useState(String(settings.request_interval));
-  const [token, setToken] = useState("");
   const [chats, setChats] = useState(settings.telegram_chat_ids.join(", "));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -41,15 +40,12 @@ export function SettingsForm({ settings }: { settings: Settings }) {
         worker_enabled: enabled,
         interval_seconds: Number(interval) || 300,
         request_interval: Number(requestInterval) || 2,
-        // An untouched field leaves the stored token alone.
-        telegram_bot_token: token.trim() ? token.trim() : null,
         telegram_chat_ids: chats
           .split(/[\n,]/)
           .map((line) => line.trim())
           .filter(Boolean),
       });
       setSaved(true);
-      setToken("");
       router.refresh();
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "Не удалось сохранить");
@@ -138,24 +134,14 @@ export function SettingsForm({ settings }: { settings: Settings }) {
         />
       </Card>
 
-      <Card icon={Send} title="Telegram" hint="Алерты о стоп-лоссе и потере первого места.">
+      <Card icon={Send} title="Telegram" hint="Изменения цен получают все, кто отправил боту /start.">
+        <p className="text-sm text-slate-700">Бот: <a href="https://t.me/repricerkaspibot" target="_blank" rel="noreferrer" className="font-medium underline">@repricerkaspibot</a>. Токен задаётся при установке и здесь не меняется.</p>
         <Field
-          label={
-            settings.telegram_configured
-              ? `Токен бота (сохранён ${settings.telegram_token_hint})`
-              : "Токен бота"
-          }
-          value={token}
-          onChange={setToken}
-          placeholder={settings.telegram_configured ? "оставьте пустым, чтобы не менять" : "123456:AA..."}
-          hint="Получить у @BotFather. Чтобы убрать, впишите пробел и сохраните."
-        />
-        <Field
-          label="Chat ID через запятую"
+          label="Chat ID владельцев через запятую"
           value={chats}
           onChange={setChats}
           placeholder="123456789"
-          hint="Свой ID можно узнать у @userinfobot. Никто, кроме этих чатов, к боту не подключится."
+          hint="Только эти чаты могут останавливать демпинг и менять цены через команды. Подписка на уведомления доступна всем через /start."
         />
       </Card>
 

@@ -13,6 +13,7 @@ install until long after it is set up.
 from __future__ import annotations
 
 import threading
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,7 +24,7 @@ from sqlalchemy.orm import Session
 from repricer.db.models import ShopSettings
 from repricer.db.settings_store import load_settings
 from repricer.scraper import KaspiClient, ProxyPool, RateLimiter
-from repricer.telegram.alerts import AlertSink, LoggingSink, TelegramSink
+from repricer.telegram.alerts import AlertSink, BroadcastTelegramSink, LoggingSink, TelegramSink
 from repricer.uploader import DatabaseCatalog, LocalFeedStorage, MerchantIdentity, SyncManager
 from repricer.worker import CycleReport, RepricingWorker, WorkerSettings
 
@@ -55,7 +56,7 @@ class RuntimeConfig:
             proxies=tuple(shop.proxies),
             request_interval=shop.request_interval,
             interval_seconds=shop.interval_seconds,
-            telegram_token=shop.telegram_bot_token.strip(),
+            telegram_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip() or shop.telegram_bot_token.strip(),
             telegram_chat_id=int(chat_ids[0]) if chat_ids else None,
         )
 
@@ -110,21 +111,28 @@ class WorkerService:
     def __exit__(self, *exc_info: object) -> None:
         self.close()
 
-    def read_config(self) -> tuple[RuntimeConfig | None, bool]:
-        """Current settings and whether the owner has the bot switched on."""
+    def read_config(self) -> tuple[RuntimeConfig | None, bool, bool]:
+        """Current settings, master switch and shared strategy readiness."""
         with self._session_factory() as session:
             shop = load_settings(session)
             session.commit()
-            return RuntimeConfig.from_settings(shop), shop.worker_enabled
+            return (
+                RuntimeConfig.from_settings(shop),
+                shop.worker_enabled,
+                bool(shop.global_strategy and shop.global_city_ids),
+            )
 
     def run_once(self) -> CycleReport | None:
         """One cycle, or None when the settings say not to run."""
-        config, enabled = self.read_config()
+        config, enabled, strategy_ready = self.read_config()
         if config is None:
             self._idle("Магазин не настроен: заполните ID магазина и название компании в панели")
             return None
         if not enabled:
             self._idle(f"merchant={config.merchant.merchant_id}: бот выключен в панели")
+            return None
+        if not strategy_ready:
+            self._idle(f"merchant={config.merchant.merchant_id}: общая стратегия и города не настроены")
             return None
 
         self._idle_reason = None
@@ -146,14 +154,14 @@ class WorkerService:
         stop = stop if stop is not None else threading.Event()
         logger.info("Сервис запущен: настройки читаются из базы, ждём включения в панели")
         while True:
-            config, enabled = self.read_config()
+            config, enabled, strategy_ready = self.read_config()
             try:
                 self.run_once()
             except Exception:
                 # A cycle can fail on anything: a database blip, a full disk, a
                 # changed Kaspi response. The service sleeps and tries again.
                 logger.exception("Цикл упал")
-            wait = config.interval_seconds if (config and enabled) else IDLE_SECONDS
+            wait = config.interval_seconds if (config and enabled and strategy_ready) else IDLE_SECONDS
             if stop.wait(wait):
                 logger.info("Остановка по сигналу")
                 return
@@ -189,6 +197,10 @@ class WorkerService:
             sync_manager_factory=make_sync_manager,
             proxy_pool=pool,
             alerts=self._alert_sink(config),
+            price_updates=(
+                BroadcastTelegramSink(config.telegram_token, config.merchant.merchant_id, self._session_factory)
+                if config.telegram_token else None
+            ),
         )
 
     @staticmethod

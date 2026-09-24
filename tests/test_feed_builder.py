@@ -97,7 +97,6 @@ def test_offer_elements_follow_the_schema_order() -> None:
         f"{NS}model",
         f"{NS}brand",
         f"{NS}availabilities",
-        f"{NS}price",
         f"{NS}cityprices",
     ]
     assert element.findtext(f"{NS}model") == "Apple iPhone 17 256Gb"
@@ -170,6 +169,10 @@ def test_offer_without_city_prices_has_no_cityprices_block() -> None:
     assert first_offer(offer()).find(f"{NS}cityprices") is None
 
 
+def test_brand_can_be_absent_as_kaspi_schema_allows() -> None:
+    assert first_offer(offer(brand="")).find(f"{NS}brand") is None
+
+
 def test_same_catalogue_renders_byte_for_byte_the_same() -> None:
     prices = {"750000000": Decimal(1000), "710000000": Decimal(1100)}
 
@@ -226,7 +229,6 @@ def test_empty_feed_is_refused() -> None:
         {"sku": ""},
         {"sku": "   "},
         {"model": ""},
-        {"brand": ""},
         {"availabilities": ()},
         {"price": Decimal(0)},
         {"price": Decimal(-1)},

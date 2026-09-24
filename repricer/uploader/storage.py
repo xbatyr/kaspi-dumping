@@ -35,7 +35,9 @@ class LocalFeedStorage:
     """
 
     def __init__(self, directory: Path | str, *, base_url: str | None = None) -> None:
-        self._directory = Path(directory)
+        # The CLI defaults to a relative "feeds" directory. Resolve it before
+        # publishing so as_uri() succeeds after the atomic write.
+        self._directory = Path(directory).resolve()
         self._base_url = base_url.rstrip("/") if base_url else None
 
     def publish(self, filename: str, content: bytes) -> str:

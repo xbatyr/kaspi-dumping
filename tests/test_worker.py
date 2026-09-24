@@ -133,6 +133,7 @@ def build_worker(session_factory: Callable[[], Session]) -> Any:
         storage: FakeStorage | None = None,
         proxy_pool: ProxyPool | None = None,
         alerts: Any = None,
+        price_updates: Any = None,
         **settings: Any,
     ) -> tuple[RepricingWorker, FakeStorage, FakeKaspiClient]:
         feed_storage = storage or FakeStorage()
@@ -145,6 +146,7 @@ def build_worker(session_factory: Callable[[], Session]) -> Any:
             ),
             proxy_pool=proxy_pool,
             alerts=alerts,
+            price_updates=price_updates,
         )
         return worker, feed_storage, client
 
@@ -561,6 +563,22 @@ class FakeSink:
 
     def send(self, text: str) -> None:
         self.messages.append(text)
+
+
+def test_price_updates_are_sent_once_after_a_real_change(session: Session, build_worker: Any) -> None:
+    make_product(session, "IPH", IPHONE, cities={ALMATY: 362000})
+    client = FakeKaspiClient({(IPHONE, ALMATY): [competitor("rival", 361000)]})
+    sink = FakeSink()
+    worker, _, _ = build_worker(client, price_updates=sink)
+
+    with worker:
+        worker.run_once()
+        worker.run_once()
+
+    assert len(sink.messages) == 1
+    assert "IPH" in sink.messages[0]
+    assert "362 000 ₸" in sink.messages[0]
+    assert "360 999 ₸" in sink.messages[0]
 
 
 def add_history(session: Session, product: Product, position: int, city_id: str = ALMATY) -> None:

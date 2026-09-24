@@ -19,6 +19,8 @@ from repricer.telegram.actions import (
     resume_all,
 )
 from repricer.telegram.auth import OwnerOnly
+from repricer.telegram.alerts import BroadcastTelegramSink
+from repricer.telegram.subscriptions import subscribe, subscriber_chat_ids, unsubscribe
 from repricer.telegram.bot import min_price_keyboard, seconds_until
 from repricer.telegram.reports import (
     daily_summary,
@@ -288,6 +290,18 @@ def test_status_without_products_says_so(session: Session) -> None:
     assert "Товаров пока нет" in render_status(status_report(session, MERCHANT))
 
 
+def test_manual_imports_are_not_counted_as_working_bot_rules(session: Session) -> None:
+    product = make_product(session)
+    product.rules[0].strategy = PricingStrategy.MANUAL
+    session.flush()
+
+    report = status_report(session, MERCHANT)
+
+    assert report.products == 1
+    assert report.active_rules == 0
+    assert "Демпинг ещё не настроен" in render_status(report)
+
+
 def test_the_summary_counts_todays_changes(session: Session) -> None:
     product = make_product(session)
     add_history(session, product, position=1)
@@ -326,13 +340,13 @@ def test_a_quiet_day_is_explained(session: Session) -> None:
 # --- Access control -----------------------------------------------------------
 
 
-def fake_message(chat_id: int) -> Message:
+def fake_message(chat_id: int, text: str = "/status") -> Message:
     return Message.model_validate(
         {
             "message_id": 1,
             "date": datetime.now(UTC),
             "chat": {"id": chat_id, "type": "private"},
-            "text": "/status",
+            "text": text,
         }
     )
 
@@ -384,6 +398,44 @@ def test_an_empty_allowlist_locks_everyone_out(warnings_logged: list[str]) -> No
 
     assert asyncio.run(guard(handler, fake_message(42), {})) is None
     assert any("ALLOWED_TELEGRAM_CHAT_IDS is empty" in message for message in warnings_logged)
+
+
+def test_anyone_can_subscribe_but_not_control_the_bot() -> None:
+    guard = OwnerOnly(frozenset({42}))
+
+    assert asyncio.run(guard(handler, fake_message(777, "/start"), {})) == "handled"
+    assert asyncio.run(guard(handler, fake_message(777, "/unsubscribe"), {})) == "handled"
+    assert asyncio.run(guard(handler, fake_message(777, "/stop_all"), {})) is None
+
+
+def test_subscriptions_are_persistent_and_scoped_to_merchant(session: Session) -> None:
+    subscribe(session, MERCHANT, 42)
+    subscribe(session, MERCHANT, 77)
+    subscribe(session, MERCHANT, 42)
+    subscribe(session, OTHER, 99)
+
+    assert subscriber_chat_ids(session, MERCHANT) == [42, 77]
+    unsubscribe(session, MERCHANT, 42)
+    assert subscriber_chat_ids(session, MERCHANT) == [77]
+    assert subscriber_chat_ids(session, OTHER) == [99]
+
+
+def test_price_broadcast_reaches_every_subscriber(session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+    subscribe(session, MERCHANT, 42)
+    subscribe(session, MERCHANT, 77)
+    sent: list[tuple[int, str]] = []
+
+    class FakeTelegramSink:
+        def __init__(self, _token: str, chat_id: int) -> None:
+            self.chat_id = chat_id
+
+        def send(self, text: str) -> None:
+            sent.append((self.chat_id, text))
+
+    monkeypatch.setattr("repricer.telegram.alerts.TelegramSink", FakeTelegramSink)
+    BroadcastTelegramSink("test-token", MERCHANT, lambda: session).send("Новая цена")
+
+    assert sent == [(42, "Новая цена"), (77, "Новая цена")]
 
 
 # --- Settings -----------------------------------------------------------------

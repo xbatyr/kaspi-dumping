@@ -1,12 +1,10 @@
-"""Nobody but the owner talks to this bot.
+"""Only the owner can control pricing; anyone may subscribe to notifications.
 
 The bot can pause repricing and move price floors, so the allowlist is checked
 on every update, including button presses. An empty allowlist denies everyone:
 a misconfigured .env must not open the bot to the world.
 
-Strangers get no reply at all. An error message would confirm that the token is
-live and worth brute-forcing; the chat ID still lands in the log so the owner
-can add themselves.
+Public /start and /unsubscribe are allowed so viewers can opt in and out.
 """
 
 from __future__ import annotations
@@ -34,6 +32,10 @@ class OwnerOnly(BaseMiddleware):
         data: dict[str, Any],
     ) -> Any:
         chat_id = chat_id_of(event)
+        if isinstance(event, Message) and event.text:
+            command = event.text.split(maxsplit=1)[0].split("@", 1)[0].lower()
+            if command in {"/start", "/unsubscribe"}:
+                return await handler(event, data)
         if chat_id is None or chat_id not in self._allowed:
             logger.warning("Ignoring update from chat {}: not in the allowlist", chat_id)
             return None

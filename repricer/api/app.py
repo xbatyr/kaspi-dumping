@@ -19,6 +19,7 @@ from repricer.api.routes import (
     rules,
     settings,
     status,
+    strategy,
 )
 
 DESCRIPTION = """
@@ -52,6 +53,7 @@ def create_app() -> FastAPI:
         openapi_tags=TAGS,
     )
     app.include_router(settings.router)
+    app.include_router(strategy.router)
     app.include_router(status.router)
     app.include_router(products.router)
     app.include_router(catalog.router)

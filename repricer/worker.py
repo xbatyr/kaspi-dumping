@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import threading
 import time
+from html import escape
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
@@ -38,6 +39,7 @@ from sqlalchemy.orm import Session
 
 from repricer.db.models import Product, RepricerRule
 from repricer.db.queries import latest_changes
+from repricer.db.settings_store import settings_or_none
 from repricer.pricing import (
     CompetitorOffer,
     DecisionReason,
@@ -48,6 +50,7 @@ from repricer.pricing import (
 )
 from repricer.scraper import KaspiClient, KaspiError, KaspiTransportError, ProxyPool
 from repricer.telegram.alerts import Alert, AlertKind, AlertSink, AlertThrottle
+from repricer.telegram.formatting import city as city_name, tenge
 from repricer.telegram.formatting import render_alert
 from repricer.uploader import MerchantIdentity, PriceUpdate, SyncManager
 
@@ -132,6 +135,7 @@ class RepricingWorker:
         engine: PricingEngine | None = None,
         proxy_pool: ProxyPool | None = None,
         alerts: AlertSink | None = None,
+        price_updates: AlertSink | None = None,
     ) -> None:
         self._settings = settings
         self._session_factory = session_factory
@@ -140,6 +144,7 @@ class RepricingWorker:
         self._engine = engine or PricingEngine()
         self._proxy_pool = proxy_pool
         self._alerts = alerts
+        self._price_updates = price_updates
         self._throttle = AlertThrottle()
         self._executor: ThreadPoolExecutor | None = None
         self._local = threading.local()
@@ -192,9 +197,6 @@ class RepricingWorker:
             and outcome.decision.new_price != outcome.snapshot.current_price
         )
         self._alert_on_proxy_trouble(unreachable, len(outcomes))
-        if not self._settings.dry_run:
-            self._notify(outcomes)
-
         feed_url = None
         if self._settings.dry_run:
             logger.info(
@@ -204,7 +206,10 @@ class RepricingWorker:
                 len(decided),
             )
         elif decided:
-            feed_url = self._write(decided)
+            feed_url, applied_ids = self._write(decided)
+            changed = len(applied_ids)
+            self._notify(outcomes)
+            self._notify_price_changes(outcomes, applied_ids)
 
         report = CycleReport(
             evaluated=len(decided),
@@ -254,6 +259,8 @@ class RepricingWorker:
     # --- Steps ----------------------------------------------------------------
 
     def _load_rules(self, session: Session) -> list[RuleSnapshot]:
+        shop = settings_or_none(session)
+        shared = shop if shop is not None and shop.global_strategy is not None else None
         statement = (
             select(RepricerRule, Product)
             .join(Product, RepricerRule.product_id == Product.id)
@@ -271,12 +278,37 @@ class RepricingWorker:
 
         snapshots: list[RuleSnapshot] = []
         for rule, product in rows:
+            if shared is not None and (
+                rule.city_id not in shared.global_city_ids
+                or rule.strategy is PricingStrategy.MANUAL
+                or rule.max_price <= rule.min_price
+            ):
+                continue
+            if not product.kaspi_product_id and rule.strategy not in {
+                PricingStrategy.MANUAL, PricingStrategy.FIXED_PRICE
+            }:
+                logger.warning("sku={} city={}: link a Kaspi card before automatic repricing", product.sku, rule.city_id)
+                continue
             try:
-                config = rule.to_pricing_config(
-                    own_merchant_id=product.merchant_id,
-                    own_rating=self._settings.own_rating,
-                    base_price=product.base_price,
-                )
+                if shared is not None:
+                    assert shared.global_strategy is not None
+                    config = PricingConfig(
+                        own_merchant_id=product.merchant_id,
+                        own_rating=self._settings.own_rating,
+                        strategy=shared.global_strategy,
+                        min_price=rule.min_price,
+                        max_price=rule.max_price,
+                        step=rule.step,
+                        target_position=shared.global_target_position,
+                        ignored_merchants=frozenset(shared.global_ignored_merchants),
+                        base_price=product.base_price,
+                    )
+                else:
+                    config = rule.to_pricing_config(
+                        own_merchant_id=product.merchant_id,
+                        own_rating=self._settings.own_rating,
+                        base_price=product.base_price,
+                    )
             except ValueError as exc:
                 # A rule the API could not have saved, or one whose product lost
                 # its base price. Skipping it beats failing the whole cycle.
@@ -365,7 +397,7 @@ class RepricingWorker:
             logger.exception("sku={} city={}: unexpected failure", snapshot.sku, snapshot.city_id)
             return TaskOutcome(snapshot, skipped=f"unexpected {type(exc).__name__}: {exc}")
 
-    def _write(self, decided: Sequence[TaskOutcome]) -> str | None:
+    def _write(self, decided: Sequence[TaskOutcome]) -> tuple[str | None, set[int]]:
         decisions = {
             outcome.snapshot.rule_id: outcome.decision
             for outcome in decided
@@ -381,13 +413,39 @@ class RepricingWorker:
                     len(decisions) - len(rules),
                 )
             updates = [PriceUpdate(rule, decisions[rule.id]) for rule in rules]
+            applied_ids = {
+                update.rule.id for update in updates
+                if update.rule.current_price != update.decision.new_price
+            }
             # sync() publishes the feed before we commit, so a failed upload
             # leaves the old prices in the database for the next cycle to retry.
             result = self._sync_manager_factory(session).sync(
                 session, self._settings.merchant, updates
             )
             session.commit()
-            return result.feed_url
+            if len(applied_ids) != result.applied:
+                logger.warning("Applied-price count changed during sync; suppressing uncertain notifications")
+                applied_ids.clear()
+            return result.feed_url, applied_ids
+
+    def _notify_price_changes(self, outcomes: Sequence[TaskOutcome], applied_ids: set[int]) -> None:
+        if self._price_updates is None or not applied_ids:
+            return
+        lines = [
+            f"<b>{escape(outcome.snapshot.sku)}</b> · {escape(city_name(outcome.snapshot.city_id))}: "
+            f"{tenge(outcome.snapshot.current_price)} → {tenge(outcome.decision.new_price)}"
+            for outcome in outcomes
+            if outcome.snapshot.rule_id in applied_ids and outcome.decision is not None
+        ]
+        header = "💰 <b>Цены в прайсе обновлены</b>\n"
+        chunk = header
+        for line in lines:
+            if len(chunk) + len(line) + 1 > 3500:
+                self._price_updates.send(chunk)
+                chunk = header
+            chunk += line + "\n"
+        if chunk != header:
+            self._price_updates.send(chunk)
 
     def _log_step(self, outcome: TaskOutcome) -> None:
         snapshot = outcome.snapshot

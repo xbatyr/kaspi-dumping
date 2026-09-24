@@ -42,6 +42,8 @@ def configure(
     settings.merchant_id = merchant_id
     settings.company = company
     settings.worker_enabled = enabled
+    settings.global_strategy = PricingStrategy.BEAT_FIRST
+    settings.global_city_ids = [ALMATY]
     for name, value in fields.items():
         setattr(settings, name, value)
     session.flush()
@@ -97,6 +99,18 @@ def test_the_switch_in_the_dashboard_stops_the_bot(
     session: Session, session_factory: Any, tmp_path: Path
 ) -> None:
     configure(session, enabled=False)
+    service, seen, _ = service_with_fake(session_factory, tmp_path)
+
+    assert service.run_once() is None
+    assert seen == []
+
+
+def test_bot_waits_for_shared_strategy(
+    session: Session, session_factory: Any, tmp_path: Path
+) -> None:
+    settings = configure(session)
+    settings.global_strategy = None
+    session.flush()
     service, seen, _ = service_with_fake(session_factory, tmp_path)
 
     assert service.run_once() is None

@@ -129,6 +129,17 @@ class ShopSettings(TimestampMixin, Base):
     telegram_chat_ids: Mapped[list[str]] = mapped_column(
         MutableList.as_mutable(ARRAY(String(32))), server_default=text("'{}'")
     )
+    global_strategy: Mapped[PricingStrategy | None] = mapped_column(
+        _str_enum(PricingStrategy, "pricing_strategy"), nullable=True
+    )
+    global_step: Mapped[int] = mapped_column(server_default=text("1"))
+    global_target_position: Mapped[int | None]
+    global_ignored_merchants: Mapped[list[str]] = mapped_column(
+        MutableList.as_mutable(ARRAY(String(64))), server_default=text("'{}'")
+    )
+    global_city_ids: Mapped[list[str]] = mapped_column(
+        MutableList.as_mutable(ARRAY(String(16))), server_default=text("'{}'")
+    )
 
     def __init__(self, **kwargs: Any) -> None:
         kwargs.setdefault("id", 1)
@@ -140,12 +151,25 @@ class ShopSettings(TimestampMixin, Base):
         kwargs.setdefault("request_interval", 2.0)
         kwargs.setdefault("telegram_bot_token", "")
         kwargs.setdefault("telegram_chat_ids", [])
+        kwargs.setdefault("global_step", 1)
+        kwargs.setdefault("global_ignored_merchants", [])
+        kwargs.setdefault("global_city_ids", [])
         super().__init__(**kwargs)
 
     @property
     def is_ready(self) -> bool:
         """Enough filled in to actually reprice."""
         return bool(self.merchant_id.strip() and self.company.strip())
+
+
+class TelegramSubscriber(Base):
+    """A chat that opted in by sending /start to this shop's bot."""
+
+    __tablename__ = "telegram_subscribers"
+
+    merchant_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    subscribed_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
 
 class ProductAvailability(TimestampMixin, Base):

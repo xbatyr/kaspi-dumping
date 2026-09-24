@@ -18,6 +18,7 @@ import type { Status } from "@/lib/types";
 export function StatusPanel({ status, feedUrl }: { status: Status; feedUrl: string }) {
   const [copied, setCopied] = useState(false);
   const blockers = Object.entries(status.blockers);
+  const localFeed = /^https?:\/\/(?:localhost|127\.0\.0\.1)(?::|\/|$)/i.test(feedUrl);
 
   async function copyFeed() {
     try {
@@ -63,7 +64,7 @@ export function StatusPanel({ status, feedUrl }: { status: Status; feedUrl: stri
           <div className="mt-4 rounded-lg bg-amber-50 p-3">
             <p className="flex items-center gap-1.5 text-sm font-medium text-amber-900">
               <AlertTriangle className="size-4" />
-              Не попадут в прайс-лист
+              Прайс временно недоступен из-за этих товаров
             </p>
             <ul className="mt-1.5 space-y-0.5 text-sm text-amber-800">
               {blockers.map(([reason, count]) => (
@@ -74,6 +75,10 @@ export function StatusPanel({ status, feedUrl }: { status: Status; feedUrl: stri
             </ul>
           </div>
         )}
+
+        {!status.worker_enabled && <p className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">Бот выключен в настройках магазина. Цены сейчас не пересчитываются.</p>}
+        {!status.global_strategy_configured && <p className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">Общая стратегия не сохранена. Настройте её во вкладке «Стратегии».</p>}
+        {status.global_strategy_configured && status.rules_active === 0 && <p className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">Нет товаров с включённым демпингом. Задайте Min/Max для товаров во вкладке «Стратегии».</p>}
 
         {status.rules_paused > 0 && (
           <p className="mt-3 text-sm text-slate-500">
@@ -91,6 +96,7 @@ export function StatusPanel({ status, feedUrl }: { status: Status; feedUrl: stri
           Кабинет продавца → Товары → Загрузка прайс-листа → Автоматическая загрузка.
           Kaspi забирает её примерно раз в час.
         </p>
+        {localFeed && <p className="mt-2 text-xs text-amber-700">Это локальный адрес для проверки. Для Kaspi нужен доступный из интернета HTTPS-адрес.</p>}
         <div className="mt-2 flex items-center gap-2">
           <code className="flex-1 truncate rounded-lg bg-slate-50 px-2 py-1.5 text-xs text-slate-700">
             {feedUrl}
@@ -107,8 +113,8 @@ export function StatusPanel({ status, feedUrl }: { status: Status; feedUrl: stri
         {!status.feed_ready && (
           <p className="mt-2 flex items-start gap-1.5 text-xs text-amber-700">
             <Loader2 className="mt-0.5 size-3.5 shrink-0" />
-            Пока публиковать нечего: добавьте товар с брендом, складом и правилом,
-            и ссылка начнёт отдавать прайс.
+            Проверьте товары без склада или цены: пока есть неполные позиции,
+            ссылка не отдаёт прайс.
           </p>
         )}
       </div>

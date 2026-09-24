@@ -43,6 +43,7 @@ from repricer.telegram.reports import (
     status_report,
 )
 from repricer.telegram.settings import TelegramSettings
+from repricer.telegram.subscriptions import subscribe, unsubscribe
 from repricer.uploader import KASPI_TIMEZONE, MerchantIdentity
 
 router = Router(name="repricer")
@@ -58,8 +59,31 @@ HELP = (
 
 
 @router.message(CommandStart())
+async def start(
+    message: Message, session_factory: Callable[[], Session], merchant: MerchantIdentity
+) -> None:
+    def save() -> None:
+        with session_factory() as session:
+            subscribe(session, merchant.merchant_id, message.chat.id)
+
+    await asyncio.to_thread(save)
+    await message.answer("Вы подписаны на изменения цен. Отключить уведомления: /unsubscribe")
+
+
+@router.message(Command("unsubscribe"))
+async def stop_subscription(
+    message: Message, session_factory: Callable[[], Session], merchant: MerchantIdentity
+) -> None:
+    def remove() -> None:
+        with session_factory() as session:
+            unsubscribe(session, merchant.merchant_id, message.chat.id)
+
+    await asyncio.to_thread(remove)
+    await message.answer("Уведомления о ценах отключены. Вернуться: /start")
+
+
 @router.message(Command("help"))
-async def start(message: Message) -> None:
+async def help_command(message: Message) -> None:
     await message.answer(HELP)
 
 

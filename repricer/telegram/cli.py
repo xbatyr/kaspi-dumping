@@ -1,9 +1,4 @@
-"""Entry point: ``repricer-bot``.
-
-The token and the allowed chats are filled in on the dashboard, so a fresh
-install can start this process immediately: it waits until a token appears and
-picks up a changed one on the fly.
-"""
+"""Entry point: ``repricer-bot``; one bot token from the environment or database."""
 
 from __future__ import annotations
 
@@ -62,7 +57,7 @@ def run(
 
 
 async def _serve(settings: TelegramSettings) -> None:
-    """Run the bot, waiting for the dashboard to hand us a token."""
+    """Run the bot, waiting for a configured token and merchant."""
     session_factory = sessionmaker(create_engine(settings.database_url, pool_pre_ping=True))
     announced = False
     while True:
@@ -70,7 +65,7 @@ async def _serve(settings: TelegramSettings) -> None:
         if configured is None:
             if not announced:
                 logger.info(
-                    "Жду настройки: укажите токен бота и chat id в панели — подхвачу без перезапуска"
+                    "Жду настройки: нужен токен Telegram и ID магазина"
                 )
                 announced = True
             await asyncio.sleep(15)
@@ -81,13 +76,13 @@ async def _serve(settings: TelegramSettings) -> None:
 
 
 def _from_database(settings: TelegramSettings, session_factory: Any) -> TelegramSettings | None:
-    """Settings with the token and chats the owner saved, or None while empty."""
+    """Settings with the fixed token and owner chats, or None while empty."""
     with session_factory() as session:
         shop = settings_or_none(session)
-    token = (shop.telegram_bot_token if shop else "") or settings.bot_token
+    token = settings.bot_token or (shop.telegram_bot_token if shop else "")
     chats = ",".join(shop.telegram_chat_ids) if shop and shop.telegram_chat_ids else settings.allowed_chat_ids_raw
     merchant = (shop.merchant_id if shop else "") or settings.merchant_id
-    if not token or not chats.strip() or not merchant:
+    if not token or not merchant:
         return None
     return settings.model_copy(
         update={

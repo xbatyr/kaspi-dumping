@@ -26,7 +26,7 @@ def raw_offer(**overrides: Any) -> dict[str, Any]:
 
 
 def test_parses_real_kaspi_response() -> None:
-    page = parse_offers_page(json.loads(FIXTURE.read_text()))
+    page = parse_offers_page(json.loads(FIXTURE.read_text(encoding="utf-8")))
 
     assert page.total == 20
     assert page.raw_count == 4

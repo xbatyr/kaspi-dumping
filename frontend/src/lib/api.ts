@@ -4,7 +4,7 @@
  *  /api/* to it, so there is one origin and no CORS to configure.
  */
 
-import type { City, RuleList, Settings, Status } from "@/lib/types";
+import type { City, GlobalStrategy, ProductRules, RuleList, Settings, Status } from "@/lib/types";
 
 const API_URL = process.env.API_URL ?? "http://127.0.0.1:8000";
 const API_KEY = process.env.REPRICER_API_KEY ?? "";
@@ -66,6 +66,14 @@ export function fetchRules(params: {
 export function fetchCities(): Promise<City[]> {
   // The list changes about as often as Kazakhstan gains a city.
   return get<City[]>("/api/cities", { next: { revalidate: 3600 } });
+}
+
+export function fetchProductRules(sku: string): Promise<ProductRules> {
+  return get<ProductRules>(`/api/products/${encodeURIComponent(sku)}`, { cache: "no-store" });
+}
+
+export function fetchGlobalStrategy(): Promise<GlobalStrategy> {
+  return get<GlobalStrategy>("/api/strategy", { cache: "no-store" });
 }
 
 export function fetchSettings(): Promise<Settings> {

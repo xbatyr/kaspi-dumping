@@ -37,10 +37,6 @@ def update_settings(payload: SettingsIn, session: SessionDep) -> SettingsOut:
     settings.interval_seconds = payload.interval_seconds
     settings.request_interval = payload.request_interval
     settings.telegram_chat_ids = list(payload.telegram_chat_ids)
-    if payload.telegram_bot_token is not None:
-        # None means "leave it alone", so the dashboard never has to send the
-        # token back just to change something else.
-        settings.telegram_bot_token = payload.telegram_bot_token.strip()
     session.commit()
     session.refresh(settings)
     logger.info(

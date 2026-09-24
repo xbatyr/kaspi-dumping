@@ -15,6 +15,8 @@ from repricer.api.schemas import StatusOut
 from repricer.api.security import ApiKeyGuard
 from repricer.db.models import PriceHistory, Product, RepricerRule
 from repricer.db.queries import latest_changes
+from repricer.db.settings_store import settings_or_none
+from repricer.pricing import PricingStrategy
 from repricer.uploader import KASPI_TIMEZONE
 
 router = APIRouter(prefix="/api/status", tags=["status"], dependencies=[ApiKeyGuard])
@@ -38,7 +40,10 @@ def get_status(session: SessionDep, merchant: MerchantDep) -> StatusOut:
         else:
             blockers[reason] = blockers.get(reason, 0) + 1
 
-    rules = [rule for product in products for rule in product.rules]
+    rules = [
+        rule for product in products for rule in product.rules
+        if rule.strategy is not PricingStrategy.MANUAL
+    ]
     changes = latest_changes(session, [product.id for product in products])
     since = datetime.now(KASPI_TIMEZONE).replace(hour=0, minute=0, second=0, microsecond=0)
     changes_today = (
@@ -51,6 +56,7 @@ def get_status(session: SessionDep, merchant: MerchantDep) -> StatusOut:
         or 0
     )
     evaluated = [rule.last_evaluated_at for rule in rules if rule.last_evaluated_at is not None]
+    shop = settings_or_none(session)
 
     return StatusOut(
         products_total=len(products),
@@ -67,5 +73,9 @@ def get_status(session: SessionDep, merchant: MerchantDep) -> StatusOut:
         ),
         last_run_at=max(evaluated) if evaluated else None,
         changes_today=changes_today,
-        feed_ready=ready > 0,
+        feed_ready=ready > 0 and all(
+            not product.is_active or feed_blocker(product) is None for product in products
+        ),
+        worker_enabled=shop.worker_enabled if shop is not None else False,
+        global_strategy_configured=bool(shop and shop.global_strategy and shop.global_city_ids),
     )

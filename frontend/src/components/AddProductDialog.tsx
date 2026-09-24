@@ -4,14 +4,14 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { AlertTriangle, FileUp, Loader2, PackagePlus, Search, Star, X } from "lucide-react";
 
-import { importProducts, searchKaspi } from "@/lib/client";
+import { importKaspiXml, importProducts, searchKaspi } from "@/lib/client";
 import { tenge } from "@/lib/format";
 import { parseCatalogCsv, CSV_TEMPLATE } from "@/lib/csv";
-import type { City, KaspiCard, ProductDraft } from "@/lib/types";
+import type { City, KaspiCard, ProductDraft, XmlImportResult } from "@/lib/types";
 
 export function AddProductDialog({ cities, onClose }: { cities: City[]; onClose: () => void }) {
   const router = useRouter();
-  const [mode, setMode] = useState<"one" | "csv">("one");
+  const [mode, setMode] = useState<"one" | "csv" | "xml">("one");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
@@ -24,6 +24,9 @@ export function AddProductDialog({ cities, onClose }: { cities: City[]; onClose:
   const [storeId, setStoreId] = useState("PP1");
   const [stock, setStock] = useState("1");
   const [csv, setCsv] = useState("");
+  const [xml, setXml] = useState("");
+  const [xmlPreview, setXmlPreview] = useState<XmlImportResult | null>(null);
+  const [inferCardIds, setInferCardIds] = useState(true);
   const [query, setQuery] = useState("");
   const [found, setFound] = useState<KaspiCard[] | null>(null);
   const [searching, setSearching] = useState(false);
@@ -54,6 +57,28 @@ export function AddProductDialog({ cities, onClose }: { cities: City[]; onClose:
   async function save() {
     setError(null);
     setDone(null);
+    if (mode === "xml") {
+      if (!xml) {
+        setError("Выберите XML-файл прайса Kaspi");
+        return;
+      }
+      setSaving(true);
+      try {
+        const result = await importKaspiXml(xml, xmlPreview !== null ? false : true, inferCardIds);
+        if (result.preview) {
+          setXmlPreview(result);
+        } else {
+          setDone(`Добавлено: ${result.created}, обновлено: ${result.updated}. ID из SKU: ${result.inferred_cards}. Без привязки к карточке: ${result.unlinked}.`);
+          setXmlPreview(null);
+          router.refresh();
+        }
+      } catch (failure) {
+        setError(failure instanceof Error ? failure.message : "Не удалось прочитать XML");
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
     let items: ProductDraft[];
     if (mode === "one") {
       if (!sku.trim() || !title.trim() || !/^\d+$/.test(kaspiId.trim())) {
@@ -138,6 +163,7 @@ export function AddProductDialog({ cities, onClose }: { cities: City[]; onClose:
             [
               ["one", "Один товар", PackagePlus],
               ["csv", "Загрузить списком", FileUp],
+              ["xml", "XML Kaspi", FileUp],
             ] as const
           ).map(([value, label, Icon]) => (
             <button
@@ -249,12 +275,12 @@ export function AddProductDialog({ cities, onClose }: { cities: City[]; onClose:
                 </div>
               </div>
               <p className="text-xs text-slate-500">
-                Бренд и склад обязательны для прайс-листа Kaspi: без них товар в фид не попадёт.
+                Склад и цена нужны для прайс-листа Kaspi; бренд можно не указывать.
                 Стратегию и цены Min/Max можно задать здесь же — кнопкой «Настроить» в таблице,
                 или сразу списком на вкладке загрузки.
               </p>
             </>
-          ) : (
+          ) : mode === "csv" ? (
             <>
               <label className="block">
                 <span className="mb-1 block text-sm font-medium text-slate-900">
@@ -283,6 +309,34 @@ export function AddProductDialog({ cities, onClose }: { cities: City[]; onClose:
                 </button>
               </div>
             </>
+          ) : (
+            <div className="space-y-3 text-sm">
+              <label className="block font-medium text-slate-900">
+                Прайс-лист Kaspi (.xml)
+                <input
+                  type="file"
+                  accept=".xml,application/xml,text/xml"
+                  onChange={async (event) => {
+                    const file = event.target.files?.[0];
+                    setXmlPreview(null);
+                    setDone(null);
+                    setError(null);
+                    setXml(file ? await file.text() : "");
+                  }}
+                  className="mt-2 block w-full text-sm font-normal"
+                />
+              </label>
+              <p className="text-slate-600">Импорт сохраняет SKU, цены по городам и остатки. Уже настроенные автоматические стратегии остаются на месте. Для демпинга каждому товару нужен ID карточки Kaspi.</p>
+              <label className="flex items-start gap-2 text-slate-700">
+                <input type="checkbox" checked={inferCardIds} onChange={(event) => { setInferCardIds(event.target.checked); setXmlPreview(null); }} className="mt-1" />
+                <span>Брать ID карточки из первой части SKU (например, <code>130342357_673822557</code> → <code>130342357</code>). Используйте, если SKU в вашем файле устроены так.</span>
+              </label>
+              {xmlPreview && (
+                <p className="rounded-lg bg-amber-50 p-3 text-amber-900">
+                  Найдено: {xmlPreview.total}. Новых: {xmlPreview.created}, обновятся: {xmlPreview.updated}. ID из SKU: {xmlPreview.inferred_cards}. Без ID карточки: {xmlPreview.unlinked}. Нажмите «Импортировать» для сохранения.
+                </p>
+              )}
+            </div>
           )}
 
           {error && (
@@ -311,7 +365,7 @@ export function AddProductDialog({ cities, onClose }: { cities: City[]; onClose:
             className="inline-flex cursor-pointer items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-60"
           >
             {saving && <Loader2 className="size-4 animate-spin" />}
-            Сохранить
+            {mode === "xml" ? (xmlPreview ? "Импортировать" : "Проверить XML") : "Сохранить"}
           </button>
         </div>
       </div>

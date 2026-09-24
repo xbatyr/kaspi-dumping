@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Body, HTTPException, Query, status
 from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
@@ -24,10 +24,13 @@ from repricer.api.schemas import (
     ProductIn,
     ProductOut,
     RuleOut,
+    XmlImportResult,
 )
 from repricer.api.security import ApiKeyGuard
 from repricer.db.models import Product, ProductAvailability, RepricerRule
 from repricer.uploader import MerchantIdentity
+from repricer.uploader.kaspi_import import ImportedOffer, parse_kaspi_xml
+from repricer.pricing import PricingStrategy
 
 router = APIRouter(prefix="/api/products", tags=["products"], dependencies=[ApiKeyGuard])
 
@@ -150,9 +153,98 @@ def import_products(payload: ImportIn, session: SessionDep, merchant: MerchantDe
     return ImportResult(created=created, updated=updated, errors=errors)
 
 
+@router.post("/import-xml", summary="Preview or import the shop's Kaspi XML price list")
+def import_kaspi_xml(
+    content: Annotated[bytes, Body(media_type="application/xml")],
+    session: SessionDep,
+    merchant: MerchantDep,
+    preview: bool = False,
+    infer_card_ids: bool = False,
+) -> XmlImportResult:
+    try:
+        catalog = parse_kaspi_xml(content, infer_card_ids_from_sku=infer_card_ids)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    if catalog.merchant_id != merchant.merchant_id:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "merchantid в XML не совпадает с ID магазина в настройках",
+        )
+    known = {
+        product.sku: product
+        for product in session.scalars(
+            select(Product)
+            .where(Product.merchant_id == merchant.merchant_id,
+                   Product.sku.in_([offer.sku for offer in catalog.offers]))
+            .options(selectinload(Product.availabilities), selectinload(Product.rules))
+        )
+    }
+    created = len(catalog.offers) - len(known)
+    unlinked = sum(
+        not (offer.kaspi_product_id or known[offer.sku].kaspi_product_id)
+        if offer.sku in known else not bool(offer.kaspi_product_id)
+        for offer in catalog.offers
+    )
+    result = XmlImportResult(
+        total=len(catalog.offers), created=created, updated=len(known),
+        unlinked=unlinked,
+        inferred_cards=sum(offer.inferred_card_id for offer in catalog.offers),
+        preview=preview,
+    )
+    if preview:
+        return result
+    for offer in catalog.offers:
+        product = known.get(offer.sku)
+        if product is None:
+            product = Product(merchant_id=merchant.merchant_id, sku=offer.sku,
+                              kaspi_product_id="")
+            session.add(product)
+        _apply_xml_offer(product, offer)
+    session.commit()
+    return result
+
+
+def _apply_xml_offer(product: Product, offer: ImportedOffer) -> None:
+    product.title = offer.title
+    product.brand = offer.brand
+    product.is_active = True
+    if offer.kaspi_product_id:
+        product.kaspi_product_id = offer.kaspi_product_id
+    if offer.base_price is not None:
+        product.base_price = offer.base_price
+
+    existing_stores = {entry.store_id: entry for entry in product.availabilities}
+    wanted_stores = {entry.store_id: entry for entry in offer.availabilities}
+    for store_id, wanted in wanted_stores.items():
+        entry = existing_stores.get(store_id)
+        if entry is None:
+            entry = ProductAvailability(store_id=store_id)
+            product.availabilities.append(entry)
+        entry.available = wanted.available
+        entry.stock_count = wanted.stock_count
+        entry.preorder_days = wanted.preorder_days
+    for store_id, entry in existing_stores.items():
+        if store_id not in wanted_stores:
+            product.availabilities.remove(entry)
+
+    existing_rules = {rule.city_id: rule for rule in product.rules}
+    for city_id, price in offer.city_prices.items():
+        rule = existing_rules.get(city_id)
+        if rule is None:
+            product.rules.append(
+                RepricerRule(city_id=city_id, strategy=PricingStrategy.MANUAL,
+                             min_price=price, max_price=price, current_price=price)
+            )
+        elif rule.strategy is PricingStrategy.MANUAL:
+            rule.min_price = price
+            rule.max_price = price
+            rule.current_price = price
+
+
 def _apply(product: Product, payload: ProductIn) -> None:
     product.title = payload.title
-    product.kaspi_product_id = payload.kaspi_product_id
+    if payload.kaspi_product_id or not product.kaspi_product_id:
+        product.kaspi_product_id = payload.kaspi_product_id
     product.brand = payload.brand
     product.base_price = payload.base_price
     product.is_active = payload.is_active
@@ -231,13 +323,11 @@ def feed_blocker(product: Product) -> str | None:
     """Why this product would be left out of the price list, in the owner's words."""
     if not product.is_active:
         return "товар выключен"
-    if not (product.brand or "").strip():
-        return "не указан бренд"
     if not product.availabilities:
         return "нет складов с остатком"
-    if not product.rules:
-        return "нет правил по городам"
-    if all(rule.current_price is None for rule in product.rules):
+    if product.base_price is None and not product.rules:
+        return "нет цены и правил по городам"
+    if product.base_price is None and all(rule.current_price is None for rule in product.rules):
         return "цена ещё не рассчитана: дождитесь цикла воркера"
     return None
 

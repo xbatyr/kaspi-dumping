@@ -37,6 +37,11 @@ def kaspi_feed(request: Request, session: SessionDep, merchant: MerchantDep) -> 
     offers, excluded = collect_feed_offers(
         session, merchant.merchant_id, catalog=DatabaseCatalog(session)
     )
+    if excluded:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "прайс неполный: проверьте товары, которые не попадают в выгрузку",
+        )
     if not offers:
         logger.error(
             "merchant={}: feed requested but nothing is publishable ({} products left out)",

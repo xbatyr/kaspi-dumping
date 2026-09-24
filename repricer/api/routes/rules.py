@@ -13,7 +13,9 @@ from repricer.api.security import ApiKeyGuard
 from repricer.api.schemas import (
     BulkToggleIn,
     BulkToggleOut,
+    BulkRuleUpdateIn,
     ProductRulesOut,
+    ProductRuleConfigurationIn,
     RuleCreate,
     RuleListOut,
     RuleOut,
@@ -22,10 +24,52 @@ from repricer.api.schemas import (
 )
 from repricer.db.models import PriceHistory, Product, RepricerRule
 from repricer.db.queries import latest_changes
+from repricer.db.settings_store import settings_or_none
 from repricer.pricing import PricingStrategy
 from repricer.uploader import MerchantIdentity
 
 router = APIRouter(prefix="/api/rules", tags=["rules"], dependencies=[ApiKeyGuard])
+
+
+@router.put("/product/{sku}/configuration", summary="Save a product's strategy for its cities atomically")
+def configure_product_rules(
+    sku: str, payload: ProductRuleConfigurationIn, session: SessionDep, merchant: MerchantDep
+) -> list[RuleOut]:
+    product = session.scalar(
+        select(Product)
+        .where(Product.merchant_id == merchant.merchant_id, Product.sku == sku)
+        .options(selectinload(Product.rules))
+    )
+    if product is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"no product with sku {sku}")
+    _require_card(product, payload.strategy)
+    if payload.strategy is PricingStrategy.FIXED_PRICE and product.base_price is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "fixed_price needs a base price")
+
+    wanted = set(payload.city_ids)
+    by_city = {rule.city_id: rule for rule in product.rules}
+    for city_id in payload.city_ids:
+        rule = by_city.get(city_id)
+        if rule is None:
+            rule = RepricerRule(product_id=product.id, city_id=city_id)
+            session.add(rule)
+            by_city[city_id] = rule
+        rule.strategy = payload.strategy
+        rule.min_price = payload.min_price
+        rule.max_price = payload.max_price
+        rule.step = payload.step
+        rule.target_position = payload.target_position
+        rule.ignored_merchants = list(payload.ignored_merchants)
+        rule.is_active = True
+    for city_id, rule in by_city.items():
+        if city_id not in wanted:
+            rule.is_active = False
+    session.commit()
+    changes = latest_changes(session, [product.id])
+    return [
+        _rule_out(rule, changes.get((product.id, rule.city_id)))
+        for rule in sorted(by_city.values(), key=lambda item: item.city_id)
+    ]
 
 
 @router.get("", summary="Products with their per-city rules and status")
@@ -94,6 +138,7 @@ def list_rules(
 )
 def create_rule(payload: RuleCreate, session: SessionDep, merchant: MerchantDep) -> RuleOut:
     product = _product_by_sku(session, merchant, payload.product_sku)
+    _require_card(product, payload.strategy)
     existing = session.scalar(
         select(RepricerRule).where(
             RepricerRule.product_id == product.id, RepricerRule.city_id == payload.city_id
@@ -132,6 +177,7 @@ def update_rule(
     rule_id: int, payload: RuleUpdate, session: SessionDep, merchant: MerchantDep
 ) -> RuleOut:
     rule = _rule_by_id(session, merchant, rule_id)
+    _require_card(rule.product, payload.strategy)
     if payload.strategy is PricingStrategy.FIXED_PRICE and rule.product.base_price is None:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -169,6 +215,88 @@ def bulk_toggle(payload: BulkToggleIn, session: SessionDep, merchant: MerchantDe
         rule.is_active = payload.is_active
     session.commit()
     return BulkToggleOut(updated=len(changed), rule_ids=sorted(rule.id for rule in changed))
+
+
+@router.post("/bulk-update", summary="Change settings of selected rules")
+def bulk_update(
+    payload: BulkRuleUpdateIn, session: SessionDep, merchant: MerchantDep
+) -> BulkToggleOut:
+    ids = set(payload.rule_ids)
+    rules = session.scalars(
+        select(RepricerRule)
+        .join(Product, RepricerRule.product_id == Product.id)
+        .where(RepricerRule.id.in_(ids), Product.merchant_id == merchant.merchant_id)
+        .options(selectinload(RepricerRule.product))
+    ).all()
+    if len(rules) != len(ids):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "some selected rules were not found")
+    global_settings = settings_or_none(session)
+    if (global_settings is not None and global_settings.global_strategy is not None
+            and payload.strategy is not None and payload.strategy is not global_settings.global_strategy):
+        raise HTTPException(status.HTTP_409_CONFLICT, "стратегия общая для всех товаров; измените её во вкладке Стратегии")
+
+    # Validate every rule before changing any of them, so a mixed selection
+    # cannot leave only part of the catalogue with new limits.
+    for rule in rules:
+        strategy = payload.strategy or rule.strategy
+        _require_card(rule.product, strategy)
+        minimum = payload.min_price if payload.min_price is not None else rule.min_price
+        maximum = payload.max_price if payload.max_price is not None else rule.max_price
+        position = (
+            payload.target_position
+            if payload.target_position is not None
+            else rule.target_position
+        )
+        if maximum < minimum:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"{rule.product.sku}: max_price must not be below min_price",
+            )
+        if strategy is PricingStrategy.FIXED_PRICE and rule.product.base_price is None:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"{rule.product.sku}: fixed_price needs a base price",
+            )
+        if strategy is PricingStrategy.TARGET_POSITION and position is None:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"{rule.product.sku}: target_position strategy needs a position",
+            )
+
+    for rule in rules:
+        if payload.strategy is not None:
+            rule.strategy = payload.strategy
+            if payload.strategy is not PricingStrategy.TARGET_POSITION:
+                rule.target_position = None
+        if payload.min_price is not None:
+            rule.min_price = payload.min_price
+        if payload.max_price is not None:
+            rule.max_price = payload.max_price
+        if payload.step is not None:
+            rule.step = payload.step
+        if payload.target_position is not None and rule.strategy is PricingStrategy.TARGET_POSITION:
+            rule.target_position = payload.target_position
+        if payload.ignored_merchants is not None:
+            rule.ignored_merchants = list(payload.ignored_merchants)
+        if payload.is_active is not None:
+            rule.is_active = payload.is_active
+    if (global_settings is not None and global_settings.global_strategy is not None
+            and (payload.min_price is not None or payload.max_price is not None)):
+        from repricer.api.routes.strategy import _apply
+
+        products = {rule.product_id: rule.product for rule in rules}
+        for product in products.values():
+            if not product.kaspi_product_id:
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{product.sku}: сначала привяжите карточку Kaspi")
+            selected = next(rule for rule in rules if rule.product_id == product.id)
+            if selected.max_price <= selected.min_price:
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "для демпинга Max должен быть выше Min")
+            _apply(product, global_settings, selected.min_price, selected.max_price, selected.step)
+            if payload.is_active is False:
+                for rule in product.rules:
+                    rule.is_active = False
+    session.commit()
+    return BulkToggleOut(updated=len(rules), rule_ids=sorted(ids))
 
 
 def _rule_out(rule: RepricerRule, change: PriceHistory | None) -> RuleOut:
@@ -210,6 +338,16 @@ def _product_by_sku(session: Session, merchant: MerchantIdentity, sku: str) -> P
     if product is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"no product with sku {sku}")
     return product
+
+
+def _require_card(product: Product, strategy: PricingStrategy) -> None:
+    if not product.kaspi_product_id and strategy not in {
+        PricingStrategy.MANUAL, PricingStrategy.FIXED_PRICE
+    }:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"{product.sku}: привяжите ID карточки Kaspi перед включением демпинга",
+        )
 
 
 def _rule_by_id(session: Session, merchant: MerchantIdentity, rule_id: int) -> RepricerRule:

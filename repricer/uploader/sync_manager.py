@@ -119,9 +119,7 @@ class DatabaseCatalog:
         for product in self._session.scalars(statement):
             brand = (product.brand or "").strip()
             in_stock = [entry for entry in product.availabilities if entry.store_id]
-            if not brand:
-                excluded.append(ExcludedOffer(product.sku, "no brand"))
-            elif not in_stock:
+            if not in_stock:
                 excluded.append(ExcludedOffer(product.sku, "no pickup point"))
             else:
                 items.append(
@@ -153,9 +151,7 @@ class SyncManager:
         catalog: CatalogSource,
         storage: FeedStorage,
         filename_template: str = DEFAULT_FILENAME_TEMPLATE,
-        # Kaspi's guide presents price and cityprices as alternatives but takes
-        # both; the base price covers cities that have no rule of their own, and
-        # the highest city price is the safe value for a city we know nothing about.
+        # Kept for existing callers; XML emits cityprices whenever they exist.
         include_base_price: bool = True,
         clock: Callable[[], datetime] = lambda: datetime.now(KASPI_TIMEZONE),
     ) -> None:
@@ -191,6 +187,11 @@ class SyncManager:
         # Make the new prices visible to the queries the feed is built from.
         session.flush()
         offers, excluded = self._collect_offers(session, merchant.merchant_id)
+        if excluded:
+            raise ValueError(
+                "refusing an incomplete feed: "
+                + ", ".join(f"{item.sku} ({item.reason})" for item in excluded[:10])
+            )
         feed = build_feed(merchant, offers, generated_at=self._clock())
         filename = self._filename_template.format(merchant_id=merchant.merchant_id)
         feed_url = self._storage.publish(filename, feed)
@@ -261,9 +262,10 @@ def collect_feed_offers(
     excluded = list(loaded.excluded)
     for item in loaded.items:
         city_prices = prices.get(item.sku)
-        if not city_prices:
+        if not city_prices and item.base_price is None:
             excluded.append(ExcludedOffer(item.sku, "no price for any city"))
             continue
+        city_prices = city_prices or {}
         base_price = item.base_price or max(city_prices.values())
         offers.append(
             FeedOffer(
@@ -283,14 +285,16 @@ def collect_feed_offers(
 
 
 def current_prices(session: Session, merchant_id: str) -> dict[str, dict[str, Decimal]]:
-    """The price each active SKU currently holds, per city."""
+    """The last published price per city, including paused repricing rules.
+
+    Pausing a rule must not remove a stocked product from the Kaspi feed.
+    """
     statement = (
         select(Product.sku, RepricerRule.city_id, RepricerRule.current_price)
         .join(RepricerRule, RepricerRule.product_id == Product.id)
         .where(
             Product.merchant_id == merchant_id,
             Product.is_active,
-            RepricerRule.is_active,
             RepricerRule.current_price.is_not(None),
         )
     )

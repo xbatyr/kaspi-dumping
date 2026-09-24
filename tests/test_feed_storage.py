@@ -38,6 +38,16 @@ def test_local_storage_creates_missing_directories(tmp_path: Path) -> None:
     assert (tmp_path / "feeds" / "kaspi" / NAME).read_bytes() == FEED
 
 
+def test_local_storage_accepts_relative_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    storage = LocalFeedStorage("feeds")
+
+    url = storage.publish(NAME, FEED)
+
+    assert url == (tmp_path / "feeds" / NAME).as_uri()
+    assert (tmp_path / "feeds" / NAME).read_bytes() == FEED
+
+
 def test_local_storage_returns_the_public_url_when_one_is_configured(tmp_path: Path) -> None:
     storage = LocalFeedStorage(tmp_path, base_url="https://feeds.example.kz/kaspi/")
 

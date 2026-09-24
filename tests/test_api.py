@@ -156,6 +156,124 @@ def test_list_is_paginated(session: Session, client: TestClient) -> None:
 # --- POST /api/rules ----------------------------------------------------------
 
 
+def test_shared_strategy_uses_personal_limits_and_skips_unconfigured_imports(
+    session: Session, client: TestClient
+) -> None:
+    first = make_product(session, "FIRST", cities={ASTANA: 120000})
+    second = make_product(session, "SECOND", cities={ASTANA: 220000})
+    for product, price in [(first, 120000), (second, 220000)]:
+        rule = product.rules[0]
+        rule.strategy = PricingStrategy.MANUAL
+        rule.min_price = Decimal(price)
+        rule.max_price = Decimal(price)
+    session.flush()
+
+    response = client.put("/api/strategy", json={
+        "strategy": "beat_first", "step": 3, "city_ids": [ASTANA, ALMATY],
+        "ignored_merchants": ["partner"],
+    })
+    assert response.status_code == 200
+    assert response.json()["configured_products"] == 0
+    assert first.rules[0].strategy is PricingStrategy.MANUAL
+
+    response = client.put("/api/strategy/products/FIRST/limits", json={
+        "min_price": "100000", "max_price": "160000",
+    })
+    assert response.status_code == 200
+    session.expire_all()
+    rules = {rule.city_id: rule for rule in first.rules}
+    assert set(rules) == {ASTANA, ALMATY}
+    assert all(rule.strategy is PricingStrategy.BEAT_FIRST for rule in rules.values())
+    assert all(rule.ignored_merchants == ["partner"] for rule in rules.values())
+    assert all(rule.min_price == Decimal(100000) for rule in rules.values())
+    assert rules[ALMATY].current_price == Decimal(120000)
+    assert second.rules[0].strategy is PricingStrategy.MANUAL
+
+    response = client.put("/api/strategy", json={
+        "strategy": "follow_second", "step": 5, "city_ids": [ASTANA],
+        "ignored_merchants": ["sister"],
+    })
+    assert response.status_code == 200
+    session.expire_all()
+    assert rules[ASTANA].strategy is PricingStrategy.FOLLOW_SECOND
+    assert rules[ASTANA].min_price == Decimal(100000)
+    assert rules[ASTANA].ignored_merchants == ["sister"]
+    assert rules[ALMATY].is_active is False
+    assert second.rules[0].strategy is PricingStrategy.MANUAL
+
+
+def test_personal_limits_can_be_prepared_before_shared_strategy(session: Session, client: TestClient) -> None:
+    product = make_product(session, "FIRST", cities={ASTANA: 120000})
+    response = client.put("/api/strategy/products/FIRST/limits", json={
+        "min_price": "100000", "max_price": "160000", "step": 25,
+    })
+    assert response.status_code == 200
+    session.expire_all()
+    assert product.rules[0].min_price == Decimal(100000)
+    assert product.rules[0].max_price == Decimal(160000)
+    assert product.rules[0].step == 25
+    assert product.rules[0].strategy is PricingStrategy.BEAT_FIRST
+
+
+def test_shared_strategy_rejects_manual_and_duplicate_cities(client: TestClient) -> None:
+    assert client.put("/api/strategy", json={
+        "strategy": "manual", "city_ids": [ASTANA],
+    }).status_code == 422
+    assert client.put("/api/strategy", json={
+        "strategy": "beat_first", "city_ids": [ASTANA, ASTANA],
+    }).status_code == 422
+
+
+def test_product_configuration_saves_strategy_exclusions_and_cities_together(
+    session: Session, client: TestClient
+) -> None:
+    product = make_product(session, "PHONE", cities={ALMATY: 362000, ASTANA: 365000})
+    payload = {
+        "strategy": "beat_first", "min_price": "340000", "max_price": "420000",
+        "step": 5, "ignored_merchants": ["partner-1", "partner-2"],
+        "city_ids": [ASTANA],
+    }
+
+    response = client.put("/api/rules/product/PHONE/configuration", json=payload)
+
+    assert response.status_code == 200
+    session.expire_all()
+    rules = {rule.city_id: rule for rule in product.rules}
+    assert rules[ASTANA].is_active is True
+    assert rules[ASTANA].min_price == Decimal(340000)
+    assert rules[ASTANA].step == 5
+    assert rules[ASTANA].ignored_merchants == ["partner-1", "partner-2"]
+    assert rules[ASTANA].current_price == Decimal(365000)
+    assert rules[ALMATY].is_active is False
+    assert rules[ALMATY].current_price == Decimal(362000)
+
+
+def test_product_configuration_rejects_invalid_limits_without_partial_changes(
+    session: Session, client: TestClient
+) -> None:
+    product = make_product(session, "PHONE", cities={ASTANA: 365000})
+    response = client.put("/api/rules/product/PHONE/configuration", json={
+        "strategy": "beat_first", "min_price": "500000", "max_price": "400000",
+        "city_ids": [ASTANA, ALMATY],
+    })
+
+    assert response.status_code == 422
+    session.expire_all()
+    assert len(product.rules) == 1
+    assert product.rules[0].min_price == Decimal(300000)
+
+
+def test_product_configuration_cannot_edit_another_shop(
+    session: Session, client: TestClient
+) -> None:
+    make_product(session, "THEIRS", merchant_id=OTHER_MERCHANT, cities={ASTANA: 1000})
+    response = client.put("/api/rules/product/THEIRS/configuration", json={
+        "strategy": "beat_first", "min_price": "900", "max_price": "1200",
+        "city_ids": [ASTANA],
+    })
+    assert response.status_code == 404
+
+
 def test_creates_a_rule(session: Session, client: TestClient) -> None:
     make_product(session)
 
@@ -338,6 +456,59 @@ def test_bulk_toggle_rejects_an_ambiguous_target(client: TestClient, payload: di
     assert client.post("/api/rules/bulk-toggle", json=payload).status_code == 422
 
 
+def test_bulk_update_changes_selected_settings(session: Session, client: TestClient) -> None:
+    first = make_product(session, "FIRST", cities={ALMATY: 1000})
+    second = make_product(session, "SECOND", cities={ALMATY: 1000})
+    untouched = make_product(session, "UNTOUCHED", cities={ALMATY: 1000})
+    selected = [first.rules[0].id, second.rules[0].id]
+
+    response = client.post(
+        "/api/rules/bulk-update",
+        json={"rule_ids": selected, "step": 5, "min_price": "310000", "is_active": False},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"updated": 2, "rule_ids": sorted(selected)}
+    session.expire_all()
+    assert [(rule.step, rule.min_price, rule.is_active) for rule in (first.rules[0], second.rules[0])] == [
+        (5, Decimal(310000), False),
+        (5, Decimal(310000), False),
+    ]
+    assert untouched.rules[0].step == 1
+
+
+def test_bulk_update_is_atomic_when_one_rule_has_invalid_limits(
+    session: Session, client: TestClient
+) -> None:
+    first = make_product(session, "FIRST", cities={ALMATY: 1000})
+    second = make_product(session, "SECOND", cities={ALMATY: 1000})
+    second.rules[0].max_price = Decimal(350000)
+    session.flush()
+
+    response = client.post(
+        "/api/rules/bulk-update",
+        json={"rule_ids": [first.rules[0].id, second.rules[0].id], "min_price": "400000"},
+    )
+
+    assert response.status_code == 422
+    session.expire_all()
+    assert first.rules[0].min_price == second.rules[0].min_price == Decimal(300000)
+
+
+def test_bulk_update_rejects_other_merchants_rule(session: Session, client: TestClient) -> None:
+    mine = make_product(session, "MINE", cities={ALMATY: 1000})
+    other = make_product(session, "OTHER", merchant_id=OTHER_MERCHANT, cities={ALMATY: 1000})
+
+    response = client.post(
+        "/api/rules/bulk-update",
+        json={"rule_ids": [mine.rules[0].id, other.rules[0].id], "step": 5},
+    )
+
+    assert response.status_code == 404
+    session.expire_all()
+    assert mine.rules[0].step == 1
+
+
 # --- GET /api/history/{sku} ---------------------------------------------------
 
 
@@ -416,11 +587,27 @@ def test_feed_serves_the_current_prices(session: Session, client: TestClient) ->
     offer = root.find(f"{NS}offers/{NS}offer")
     assert offer is not None
     assert offer.get("sku") == "IPH-256"
-    # The product's own base price wins over the highest city price.
-    assert offer.findtext(f"{NS}price") == "400000"
+    # Kaspi's XSD chooses cityprices or price, never both.
+    assert offer.find(f"{NS}price") is None
     assert {node.get("cityId"): node.text for node in offer.iter(f"{NS}cityprice")} == {
         ALMATY: "362000",
         ASTANA: "366000",
+    }
+
+
+def test_paused_rule_keeps_its_last_price_in_the_feed(
+    session: Session, client: TestClient
+) -> None:
+    product = make_product(session, cities={ALMATY: 362000})
+    product.rules[0].is_active = False
+    session.flush()
+
+    response = client.get("/feed/kaspi.xml")
+
+    assert response.status_code == 200
+    root = ET.fromstring(response.content)
+    assert {node.get("cityId"): node.text for node in root.iter(f"{NS}cityprice")} == {
+        ALMATY: "362000"
     }
 
 
@@ -448,26 +635,24 @@ def test_feed_etag_changes_when_a_price_does(session: Session, client: TestClien
     assert client.get("/feed/kaspi.xml").headers["etag"] != etag
 
 
-def test_feed_leaves_out_products_it_cannot_publish(session: Session, client: TestClient) -> None:
+def test_feed_refuses_partial_catalogue(session: Session, client: TestClient) -> None:
     make_product(session, "GOOD", cities={ALMATY: 362000})
     make_product(session, "NO-BRAND", brand=None, cities={ALMATY: 1000})
     make_product(session, "NO-STORE", stores=False, cities={ALMATY: 1000})
     make_product(session, "NO-PRICE", cities={ALMATY: None})
     make_product(session, "INACTIVE", active=False, cities={ALMATY: 1000})
 
-    root = ET.fromstring(client.get("/feed/kaspi.xml").content)
-
-    assert [node.get("sku") for node in root.iter(f"{NS}offer")] == ["GOOD"]
+    assert client.get("/feed/kaspi.xml").status_code == 503
 
 
 def test_feed_refuses_to_serve_an_empty_catalogue(session: Session, client: TestClient) -> None:
-    make_product(session, "NO-BRAND", brand=None, cities={ALMATY: 1000})
+    make_product(session, "NO-STORE", stores=False, cities={ALMATY: 1000})
 
     response = client.get("/feed/kaspi.xml")
 
     # An empty feed would take the whole shop off Kaspi, so it is never served.
     assert response.status_code == 503
-    assert "empty feed" in response.json()["detail"]
+    assert "прайс неполный" in response.json()["detail"]
 
 
 # --- Documentation ------------------------------------------------------------
@@ -587,7 +772,6 @@ def test_the_same_sku_twice_is_409(session: Session, client: TestClient) -> None
         {"sku": ""},
         {"title": ""},
         {"kaspi_product_id": "abc"},
-        {"kaspi_product_id": ""},
         {"base_price": "0"},
         {"availabilities": [{"store_id": "", "stock_count": 1}]},
         {"availabilities": [{"store_id": "PP1", "stock_count": -1}]},
@@ -679,18 +863,96 @@ def test_the_list_explains_why_a_product_is_not_in_the_feed(
 
     blockers = {item["sku"]: item["feed_blocker"] for item in client.get("/api/products").json()}
 
-    assert blockers["NO-BRAND"] == "не указан бренд"
+    assert blockers["NO-BRAND"] is None
     assert blockers["NO-STOCK"] == "нет складов с остатком"
-    assert blockers["FINE"] == "нет правил по городам"
+    assert blockers["FINE"] is None
+
+
+def test_kaspi_xml_import_preserves_prices_and_can_be_linked(
+    session: Session, client: TestClient
+) -> None:
+    xml = b'''<?xml version="1.0" encoding="utf-8"?>
+<kaspi_catalog date="2026-09-24 18:00" company="Example">
+  <merchantid>30123456</merchantid><offers><offer sku="ART-001">
+    <model>Example X1</model><brand>Example</brand>
+    <availabilities><availability available="yes" storeId="PP1" preOrder="0" stockCount="10"/></availabilities>
+    <cityprices><price cityId="750000000">149990</price></cityprices>
+  </offer></offers>
+</kaspi_catalog>'''
+    headers = {"Content-Type": "application/xml"}
+    preview = client.post("/api/products/import-xml?preview=true", content=xml, headers=headers)
+    assert preview.status_code == 200
+    assert preview.json() == {"total": 1, "created": 1, "updated": 0, "unlinked": 1, "inferred_cards": 0, "preview": True}
+    assert client.get("/api/products").json() == []
+
+    result = client.post("/api/products/import-xml", content=xml, headers=headers)
+    assert result.status_code == 200
+    product = client.get("/api/products/ART-001").json()
+    assert product["rules"][0]["current_price"] == "149990"
+    assert product["availabilities"][0]["stock_count"] == 10
+    assert product["feed_blocker"] is None
+    assert client.get("/feed/kaspi.xml").status_code == 200
+
+    rule_id = product["rules"][0]["id"]
+    automatic = {
+        "strategy": "beat_first", "min_price": "140000", "max_price": "170000", "step": 10
+    }
+    assert client.put(f"/api/rules/{rule_id}", json=automatic).status_code == 422
+
+    product["kaspi_product_id"] = "102298404"
+    assert client.put("/api/products/ART-001", json={**product, "rules": []}).status_code == 200
+    assert client.get("/api/products/ART-001").json()["kaspi_product_id"] == "102298404"
+    assert client.put(f"/api/rules/{rule_id}", json=automatic).status_code == 200
+
+
+def test_kaspi_xml_import_rejects_wrong_merchant_and_duplicate_sku(
+    session: Session, client: TestClient
+) -> None:
+    offer = b'<offer sku="A"><model>Item</model><brand>Brand</brand><price>100</price><availabilities><availability available="yes" storeId="PP1"/></availabilities></offer>'
+    xml = b'<kaspi_catalog><merchantid>99999999</merchantid><offers>' + offer + b'</offers></kaspi_catalog>'
+    headers = {"Content-Type": "application/xml"}
+    assert client.post("/api/products/import-xml", content=xml, headers=headers).status_code == 422
+    duplicate = xml.replace(b"99999999", b"30123456").replace(offer, offer + offer)
+    assert client.post("/api/products/import-xml", content=duplicate, headers=headers).status_code == 422
+    assert client.get("/api/products").json() == []
+
+
+def test_real_export_shape_imports_and_serves_valid_feed(
+    session: Session, client: TestClient
+) -> None:
+    xml = b'''<kaspi_catalog xmlns="kaspiShopping" date="2026-09-24 21:11">
+      <company>Example</company><merchantid>30123456</merchantid>
+      <offers><offer sku="130342357_673822557">
+        <model>Example camera</model><brand></brand>
+        <availabilities><availability available="yes" storeId="SHOP_A" preOrder="0" stockCount="2.0"/></availabilities>
+        <cityprices><cityprice cityId="710000000">127019</cityprice></cityprices>
+      </offer></offers></kaspi_catalog>'''
+    response = client.post(
+        "/api/products/import-xml?infer_card_ids=true", content=xml,
+        headers={"Content-Type": "application/xml"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["inferred_cards"] == 1
+    product = client.get("/api/products/130342357_673822557").json()
+    assert product["kaspi_product_id"] == "130342357"
+    assert product["availabilities"][0]["stock_count"] == 2
+    feed = client.get("/feed/kaspi.xml")
+    assert feed.status_code == 200
+    offer = ET.fromstring(feed.content).find(f"{NS}offers/{NS}offer")
+    assert offer is not None
+    assert offer.find(f"{NS}brand") is None
+    assert offer.find(f"{NS}price") is None
+    assert offer.findtext(f"{NS}cityprices/{NS}cityprice") == "127019"
 
 
 def test_only_blocked_narrows_the_list(session: Session, client: TestClient) -> None:
     make_product(session, "READY", cities={ALMATY: 1000})
-    client.post("/api/products", json=product_payload(sku="NO-BRAND", brand=None))
+    client.post("/api/products", json=product_payload(sku="NO-STOCK", availabilities=[]))
 
     blocked = client.get("/api/products", params={"only_blocked": True}).json()
 
-    assert [item["sku"] for item in blocked] == ["NO-BRAND"]
+    assert [item["sku"] for item in blocked] == ["NO-STOCK"]
 
 
 def test_another_merchants_product_is_not_visible(session: Session, client: TestClient) -> None:
@@ -896,9 +1158,9 @@ def test_status_counts_what_is_ready_and_what_blocks(session: Session, client: T
     body = client.get("/api/status").json()
 
     assert body["products_total"] == 3
-    assert body["products_ready"] == 1
-    assert body["blockers"] == {"не указан бренд": 1, "нет правил по городам": 1}
-    assert body["feed_ready"] is True
+    assert body["products_ready"] == 2
+    assert body["blockers"] == {"нет цены и правил по городам": 1}
+    assert body["feed_ready"] is False
     assert body["rules_active"] == 2
 
 
@@ -938,6 +1200,8 @@ def test_an_empty_shop_is_not_feed_ready(session: Session, client: TestClient) -
         "last_run_at": None,
         "changes_today": 0,
         "feed_ready": False,
+        "worker_enabled": False,
+        "global_strategy_configured": False,
     }
 
 
@@ -980,8 +1244,10 @@ def test_settings_are_saved_and_read_back(session: Session, client: TestClient) 
     assert stored.telegram_chat_ids == ["42"]
 
 
-def test_the_telegram_token_never_comes_back_in_full(client: TestClient) -> None:
-    client.put("/api/settings", json=settings_payload(telegram_bot_token="123456:SECRETTOKEN"))
+def test_the_telegram_token_never_comes_back_in_full(session: Session, client: TestClient) -> None:
+    client.put("/api/settings", json=settings_payload())
+    session.scalars(select(ShopSettings)).one().telegram_bot_token = "123456:SECRETTOKEN"
+    session.commit()
 
     body = client.get("/api/settings").json()
 
@@ -991,7 +1257,9 @@ def test_the_telegram_token_never_comes_back_in_full(client: TestClient) -> None
 
 
 def test_saving_other_fields_keeps_the_token(session: Session, client: TestClient) -> None:
-    client.put("/api/settings", json=settings_payload(telegram_bot_token="123456:SECRET"))
+    client.put("/api/settings", json=settings_payload())
+    session.scalars(select(ShopSettings)).one().telegram_bot_token = "123456:SECRET"
+    session.commit()
 
     client.put("/api/settings", json=settings_payload(company="ТОО Другое"))
 
@@ -999,13 +1267,16 @@ def test_saving_other_fields_keeps_the_token(session: Session, client: TestClien
     assert session.scalars(select(ShopSettings)).one().telegram_bot_token == "123456:SECRET"
 
 
-def test_an_empty_token_clears_it(session: Session, client: TestClient) -> None:
-    client.put("/api/settings", json=settings_payload(telegram_bot_token="123456:SECRET"))
+def test_telegram_token_cannot_be_changed_in_settings(session: Session, client: TestClient) -> None:
+    client.put("/api/settings", json=settings_payload())
+    session.scalars(select(ShopSettings)).one().telegram_bot_token = "123456:SECRET"
+    session.commit()
 
-    client.put("/api/settings", json=settings_payload(telegram_bot_token=""))
+    response = client.put("/api/settings", json=settings_payload(telegram_bot_token="other"))
 
+    assert response.status_code == 422
     session.expire_all()
-    assert session.scalars(select(ShopSettings)).one().telegram_bot_token == ""
+    assert session.scalars(select(ShopSettings)).one().telegram_bot_token == "123456:SECRET"
 
 
 @pytest.mark.parametrize(

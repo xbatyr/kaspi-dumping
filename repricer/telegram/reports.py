@@ -16,6 +16,8 @@ from sqlalchemy.orm import Session
 
 from repricer.db.models import PriceHistory, Product, RepricerRule
 from repricer.db.queries import latest_changes
+from repricer.db.settings_store import settings_or_none
+from repricer.pricing import PricingStrategy
 from repricer.telegram.formatting import STRATEGY_NAMES, city, position, tenge
 
 
@@ -38,6 +40,7 @@ class StatusReport:
     first_place: int
     lines: list[StatusLine]
     shown_of: int
+    worker_enabled: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,6 +65,8 @@ def status_report(session: Session, merchant_id: str, *, limit: int = 10) -> Sta
     lines: list[StatusLine] = []
     active = paused = first = 0
     for rule, product in rows:
+        if rule.strategy is PricingStrategy.MANUAL:
+            continue
         change = changes.get((rule.product_id, rule.city_id))
         place = change.expected_position if change else None
         if rule.is_active:
@@ -91,6 +96,7 @@ def status_report(session: Session, merchant_id: str, *, limit: int = 10) -> Sta
         first_place=first,
         lines=lines[:limit],
         shown_of=len(lines),
+        worker_enabled=bool((shop := settings_or_none(session)) and shop.worker_enabled),
     )
 
 
@@ -115,7 +121,8 @@ def daily_summary(session: Session, merchant_id: str, since: datetime) -> DailyS
     rules = session.execute(
         select(RepricerRule, Product)
         .join(Product, RepricerRule.product_id == Product.id)
-        .where(Product.merchant_id == merchant_id, Product.is_active, RepricerRule.is_active)
+        .where(Product.merchant_id == merchant_id, Product.is_active, RepricerRule.is_active,
+               RepricerRule.strategy != PricingStrategy.MANUAL)
     ).all()
     latest = latest_changes(session, [product.id for _rule, product in rules])
     first_place = sum(
@@ -136,9 +143,12 @@ def daily_summary(session: Session, merchant_id: str, since: datetime) -> DailyS
 
 def render_status(report: StatusReport) -> str:
     if report.shown_of == 0:
+        if report.products:
+            return f"В каталоге {report.products} товаров. Демпинг ещё не настроен: задайте общую стратегию и Min/Max для товаров."
         return "Товаров пока нет: добавьте их в базу, и они появятся здесь."
     head = [
         "📊 <b>Статус репрайсера</b>",
+        "Бот включён" if report.worker_enabled else "Бот выключен в настройках",
         f"Товаров: <b>{report.products}</b> · правил активно: <b>{report.active_rules}</b>"
         + (f" · на паузе: {report.paused_rules}" if report.paused_rules else ""),
         f"На первом месте: <b>{report.first_place}</b> из {report.active_rules}",

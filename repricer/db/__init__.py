@@ -5,6 +5,7 @@ from repricer.db.models import (
     ProductAvailability,
     RepricerRule,
     ShopSettings,
+    TelegramSubscriber,
 )
 from repricer.db.queries import latest_changes
 
@@ -15,5 +16,6 @@ __all__ = [
     "ProductAvailability",
     "RepricerRule",
     "ShopSettings",
+    "TelegramSubscriber",
     "latest_changes",
 ]

@@ -59,15 +59,29 @@ export interface City {
   name: string;
 }
 
-/** What the strategy dialog sends back, before it is split into per-city calls. */
-export interface RuleDraft {
-  strategy: Strategy;
-  min_price: string;
-  max_price: string;
+export interface GlobalStrategy {
+  strategy: Strategy | null;
   step: number;
   target_position: number | null;
   ignored_merchants: string[];
-  cityIds: string[];
+  city_ids: string[];
+  configured_products: number;
+}
+
+export interface GlobalStrategyDraft {
+  strategy: Strategy;
+  target_position: number | null;
+  ignored_merchants: string[];
+  city_ids: string[];
+}
+
+export interface BulkRuleChanges {
+  strategy?: Strategy;
+  min_price?: string;
+  max_price?: string;
+  step?: number;
+  target_position?: number;
+  is_active?: boolean;
 }
 
 export interface AvailabilityDraft {
@@ -104,6 +118,15 @@ export interface ImportResult {
   errors: { sku: string; reason: string }[];
 }
 
+export interface XmlImportResult {
+  total: number;
+  created: number;
+  updated: number;
+  unlinked: number;
+  inferred_cards: number;
+  preview: boolean;
+}
+
 export interface Status {
   products_total: number;
   products_ready: number;
@@ -114,6 +137,8 @@ export interface Status {
   last_run_at: string | null;
   changes_today: number;
   feed_ready: boolean;
+  worker_enabled: boolean;
+  global_strategy_configured: boolean;
 }
 
 export interface HistoryEntry {
@@ -159,7 +184,6 @@ export interface SettingsDraft {
   worker_enabled: boolean;
   interval_seconds: number;
   request_interval: number;
-  telegram_bot_token: string | null;
   telegram_chat_ids: string[];
 }
 

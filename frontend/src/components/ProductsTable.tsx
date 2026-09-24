@@ -15,9 +15,10 @@ import {
 import { ActiveToggle } from "@/components/ActiveToggle";
 import { AddProductDialog } from "@/components/AddProductDialog";
 import { PositionBadge } from "@/components/PositionBadge";
+import { PriceQuickEdit } from "@/components/PriceQuickEdit";
 import { HistoryDialog } from "@/components/HistoryDialog";
 import { StatusPanel } from "@/components/StatusPanel";
-import { StrategyDialog } from "@/components/StrategyDialog";
+import { linkKaspiCard } from "@/lib/client";
 import { relativeTime, tenge } from "@/lib/format";
 import { STRATEGY_LABELS } from "@/lib/strategies";
 import type { City, ProductRules, Rule, RuleList, Status } from "@/lib/types";
@@ -34,16 +35,49 @@ interface Props {
 
 export function ProductsTable({ data, cities, search, status, feedUrl }: Props) {
   const router = useRouter();
-  const [city, setCity] = useState(
-    cities.some((item) => item.id === DEFAULT_CITY) ? DEFAULT_CITY : (cities[0]?.id ?? ""),
-  );
-  const [editing, setEditing] = useState<ProductRules | null>(null);
+  const [city, setCity] = useState(() => {
+    const counts = new Map<string, number>();
+    for (const product of data.items) {
+      for (const rule of product.rules) counts.set(rule.city_id, (counts.get(rule.city_id) ?? 0) + 1);
+    }
+    const mostUsed = [...counts].sort((a, b) => b[1] - a[1])[0]?.[0];
+    return mostUsed ?? (cities.some((item) => item.id === DEFAULT_CITY) ? DEFAULT_CITY : (cities[0]?.id ?? ""));
+  });
   const [adding, setAdding] = useState(false);
   const [historyOf, setHistoryOf] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Set<number>>(() => new Set());
+  const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   function ruleFor(product: ProductRules): Rule | undefined {
     return product.rules.find((rule) => rule.city_id === city);
+  }
+
+  const visibleRuleIds = data.items.flatMap((product) => {
+    const rule = ruleFor(product);
+    return rule ? [rule.id] : [];
+  });
+  const selectedRuleIds = visibleRuleIds.filter((id) => selected.has(id));
+  const allVisibleSelected = visibleRuleIds.length > 0 && selectedRuleIds.length === visibleRuleIds.length;
+
+  function toggleSelected(id: number) {
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleAllVisible() {
+    setSelected((current) => {
+      const next = new Set(current);
+      for (const id of visibleRuleIds) {
+        if (allVisibleSelected) next.delete(id);
+        else next.add(id);
+      }
+      return next;
+    });
   }
 
   // The page's own search params come in as props, so this component never
@@ -53,6 +87,24 @@ export function ProductsTable({ data, cities, search, status, feedUrl }: Props) 
     if (search) next.set("q", search);
     next.set("offset", String(Math.max(0, offset)));
     router.push(`/?${next}`);
+  }
+
+  async function linkCard(product: ProductRules) {
+    const value = window.prompt(`ID карточки Kaspi для ${product.sku} (цифры в конце ссылки):`);
+    if (value === null) return;
+    const cardId = value.trim();
+    if (!/^\d{1,64}$/.test(cardId)) {
+      setError("ID карточки должен содержать только цифры");
+      return;
+    }
+    try {
+      await linkKaspiCard(product.sku, cardId);
+      setNotice(`Карточка для ${product.sku} привязана. Теперь можно настроить стратегию.`);
+      setError(null);
+      router.refresh();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "Не удалось привязать карточку");
+    }
   }
 
   return (
@@ -72,6 +124,15 @@ export function ProductsTable({ data, cities, search, status, feedUrl }: Props) 
         </form>
 
         <div className="flex items-center gap-2">
+        {selectedRuleIds.length > 0 && (
+          <button
+            type="button"
+            onClick={() => router.push(`/strategies?bulk=${selectedRuleIds.join(",")}`)}
+            className="cursor-pointer rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50"
+          >
+            Настроить выбранные ({selectedRuleIds.length})
+          </button>
+        )}
         <button
           type="button"
           onClick={() => setAdding(true)}
@@ -84,7 +145,7 @@ export function ProductsTable({ data, cities, search, status, feedUrl }: Props) 
           Город
           <select
             value={city}
-            onChange={(event) => setCity(event.target.value)}
+            onChange={(event) => { setCity(event.target.value); setSelected(new Set()); }}
             className="cursor-pointer rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-slate-400"
           >
             {cities.map((item) => (
@@ -103,6 +164,7 @@ export function ProductsTable({ data, cities, search, status, feedUrl }: Props) 
           {error}
         </p>
       )}
+      {notice && <p className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800">{notice}</p>}
 
       {data.items.length === 0 ? (
         <div className="rounded-xl border border-dashed border-slate-300 bg-white py-16 text-center">
@@ -117,15 +179,18 @@ export function ProductsTable({ data, cities, search, status, feedUrl }: Props) 
       ) : (
         <>
           {/* Desktop */}
-          <div className="hidden overflow-hidden rounded-xl border border-slate-200 bg-white md:block">
+          <div className="hidden rounded-xl border border-slate-200 bg-white md:block">
             <table className="w-full text-sm">
               <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
                 <tr>
+                  <th className="px-3 py-3">
+                    <input type="checkbox" aria-label="Выбрать все правила на странице" checked={allVisibleSelected} onChange={toggleAllVisible} disabled={visibleRuleIds.length === 0} className="cursor-pointer" />
+                  </th>
                   <th className="px-4 py-3 font-medium">Товар</th>
                   <th className="px-4 py-3 font-medium">Бот</th>
-                  <th className="px-4 py-3 text-right font-medium">Цена на Kaspi</th>
+                  <th className="px-4 py-3 text-right font-medium">Цена в прайсе</th>
                   <th className="px-4 py-3 text-right font-medium">Расчётная</th>
-                  <th className="px-4 py-3 text-right font-medium">Min / Max</th>
+                  <th className="px-4 py-3 text-right font-medium">Min / Max / Шаг</th>
                   <th className="px-4 py-3 font-medium">Позиция</th>
                   <th className="px-4 py-3" />
                 </tr>
@@ -135,13 +200,16 @@ export function ProductsTable({ data, cities, search, status, feedUrl }: Props) 
                   const rule = ruleFor(product);
                   return (
                     <tr key={product.sku} className="hover:bg-slate-50/60">
+                      <td className="px-3 py-3">
+                        <input type="checkbox" aria-label={`Выбрать ${product.sku}`} checked={rule ? selected.has(rule.id) : false} onChange={() => { if (rule) toggleSelected(rule.id); }} disabled={!rule} className="cursor-pointer" />
+                      </td>
                       <td className="px-4 py-3">
                         <div className="max-w-xs truncate font-medium text-slate-900">
                           {product.title}
                         </div>
                         <div className="mt-0.5 flex items-center gap-2 text-xs text-slate-500">
                           <span className="font-mono">{product.sku}</span>
-                          <a
+                          {product.kaspi_product_id ? <a
                             href={`https://kaspi.kz/shop/p/-${product.kaspi_product_id}/`}
                             target="_blank"
                             rel="noreferrer"
@@ -149,19 +217,19 @@ export function ProductsTable({ data, cities, search, status, feedUrl }: Props) 
                           >
                             карточка
                             <ExternalLink className="size-3" />
-                          </a>
+                          </a> : <button type="button" onClick={() => void linkCard(product)} className="text-amber-700 underline">Привязать карточку</button>}
                         </div>
                       </td>
                       <td className="px-4 py-3">
-                        <ActiveToggle
+                        {rule?.strategy === "manual" ? <span className="text-xs text-slate-500">Вручную</span> : <ActiveToggle
                           ruleIds={rule ? [rule.id] : []}
                           isActive={rule?.is_active ?? false}
                           label={`Репрайсер для ${product.sku}`}
                           onError={setError}
-                        />
+                        />}
                       </td>
                       <td className="tabular px-4 py-3 text-right font-medium text-slate-900">
-                        {tenge(rule?.current_price)}
+                        <PriceQuickEdit key={`${product.sku}:${rule?.min_price}:${rule?.max_price}:${rule?.step}`} product={product} rule={rule} />
                         <div className="text-xs font-normal text-slate-400">
                           {relativeTime(rule?.last_evaluated_at ?? null)}
                         </div>
@@ -179,6 +247,7 @@ export function ProductsTable({ data, cities, search, status, feedUrl }: Props) 
                           <>
                             {tenge(rule.min_price)}
                             <div className="text-xs text-slate-400">{tenge(rule.max_price)}</div>
+                            <div className="text-xs text-slate-400">шаг {tenge(String(rule.step))}</div>
                           </>
                         ) : (
                           "—"
@@ -203,11 +272,11 @@ export function ProductsTable({ data, cities, search, status, feedUrl }: Props) 
                         </button>
                         <button
                           type="button"
-                          onClick={() => setEditing(product)}
+                          onClick={() => product.kaspi_product_id ? router.push(`/strategies?sku=${encodeURIComponent(product.sku)}`) : void linkCard(product)}
                           className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-700 hover:border-slate-300 hover:bg-slate-50"
                         >
                           <SlidersHorizontal className="size-3.5" />
-                          {rule ? "Стратегия" : "Настроить"}
+                          {!product.kaspi_product_id ? "Привязать" : "Настроить"}
                         </button>
                       </td>
                     </tr>
@@ -228,22 +297,25 @@ export function ProductsTable({ data, cities, search, status, feedUrl }: Props) 
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <p className="truncate font-medium text-slate-900">{product.title}</p>
+                      <div className="flex items-center gap-2">
+                        <input type="checkbox" aria-label={`Выбрать ${product.sku}`} checked={rule ? selected.has(rule.id) : false} onChange={() => { if (rule) toggleSelected(rule.id); }} disabled={!rule} className="cursor-pointer" />
+                        <p className="truncate font-medium text-slate-900">{product.title}</p>
+                      </div>
                       <p className="mt-0.5 font-mono text-xs text-slate-500">{product.sku}</p>
                     </div>
-                    <ActiveToggle
+                    {rule?.strategy === "manual" ? <span className="text-xs text-slate-500">Вручную</span> : <ActiveToggle
                       ruleIds={rule ? [rule.id] : []}
                       isActive={rule?.is_active ?? false}
                       label={`Репрайсер для ${product.sku}`}
                       onError={setError}
-                    />
+                    />}
                   </div>
 
                   <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
                     <div>
-                      <dt className="text-xs text-slate-500">Цена на Kaspi</dt>
+                      <dt className="text-xs text-slate-500">Цена в прайсе</dt>
                       <dd className="tabular font-medium text-slate-900">
-                        {tenge(rule?.current_price)}
+                        <PriceQuickEdit key={`${product.sku}:${rule?.min_price}:${rule?.max_price}:${rule?.step}`} product={product} rule={rule} />
                       </dd>
                     </div>
                     <div>
@@ -253,9 +325,9 @@ export function ProductsTable({ data, cities, search, status, feedUrl }: Props) 
                       </dd>
                     </div>
                     <div>
-                      <dt className="text-xs text-slate-500">Min / Max</dt>
+                      <dt className="text-xs text-slate-500">Min / Max / Шаг</dt>
                       <dd className="tabular text-slate-700">
-                        {rule ? `${tenge(rule.min_price)} — ${tenge(rule.max_price)}` : "—"}
+                        {rule ? `${tenge(rule.min_price)} — ${tenge(rule.max_price)} · шаг ${tenge(String(rule.step))}` : "—"}
                       </dd>
                     </div>
                     <div>
@@ -269,11 +341,11 @@ export function ProductsTable({ data, cities, search, status, feedUrl }: Props) 
                   <div className="mt-3 flex gap-2">
                     <button
                       type="button"
-                      onClick={() => setEditing(product)}
+                      onClick={() => product.kaspi_product_id ? router.push(`/strategies?sku=${encodeURIComponent(product.sku)}`) : void linkCard(product)}
                       className="inline-flex flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700"
                     >
                       <SlidersHorizontal className="size-4" />
-                      {rule ? "Стратегия" : "Настроить"}
+                      {!product.kaspi_product_id ? "Привязать" : "Настроить"}
                     </button>
                     <button
                       type="button"
@@ -323,14 +395,6 @@ export function ProductsTable({ data, cities, search, status, feedUrl }: Props) 
         <HistoryDialog sku={historyOf} cities={cities} onClose={() => setHistoryOf(null)} />
       )}
 
-      {editing && (
-        <StrategyDialog
-          product={editing}
-          cities={cities}
-          focusCity={city}
-          onClose={() => setEditing(null)}
-        />
-      )}
     </div>
   );
 }

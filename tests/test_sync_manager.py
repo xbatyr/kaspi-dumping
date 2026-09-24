@@ -239,8 +239,7 @@ def test_city_prices_and_base_price_cover_every_enabled_city(
 
     offer = next(iter(storage.last_feed.iter(f"{NS}offer")))
     assert city_prices_in(storage.last_feed, "SKU-1") == {ALMATY: "361999", ASTANA: "365000"}
-    # The base price covers cities with no rule, so it takes the highest.
-    assert offer.findtext(f"{NS}price") == "365000"
+    assert offer.find(f"{NS}price") is None
 
 
 def test_base_price_can_be_left_out(session: Session, manager_factory: Any) -> None:
@@ -285,23 +284,20 @@ def test_feed_name_follows_the_template(session: Session, manager_factory: Any) 
 @pytest.mark.parametrize(
     ("kwargs", "reason"),
     [
-        ({"brand": None}, "no brand"),
         ({"stores": False}, "no pickup point"),
         ({"prices": {ALMATY: None}}, "no price for any city"),
-        ({"enabled": False}, "no price for any city"),
     ],
 )
-def test_incomplete_product_is_left_out_with_a_reason(
+def test_incomplete_product_blocks_publication(
     session: Session, manager_factory: Any, kwargs: dict[str, Any], reason: str
 ) -> None:
     changed = make_product(session, "SKU-1", prices={ALMATY: 362000})
     make_product(session, "SKU-BAD", **kwargs)
     manager, storage = manager_factory()
 
-    result = manager.sync(session, MERCHANT, [PriceUpdate(rule_of(changed), decision(361999))])
-
-    assert ExcludedOffer("SKU-BAD", reason) in result.excluded
-    assert skus_in(storage.last_feed) == ["SKU-1"]
+    with pytest.raises(ValueError, match=reason):
+        manager.sync(session, MERCHANT, [PriceUpdate(rule_of(changed), decision(361999))])
+    assert storage.published == []
 
 
 def test_inactive_product_is_left_out(session: Session, manager_factory: Any) -> None:
@@ -317,10 +313,10 @@ def test_inactive_product_is_left_out(session: Session, manager_factory: Any) ->
 def test_catalogue_with_nothing_publishable_refuses_to_publish(
     session: Session, manager_factory: Any
 ) -> None:
-    product = make_product(session, "SKU-1", brand=None)
+    product = make_product(session, "SKU-1", stores=False)
     manager, storage = manager_factory()
 
-    with pytest.raises(ValueError, match="no offers"):
+    with pytest.raises(ValueError, match="no pickup point"):
         manager.sync(session, MERCHANT, [PriceUpdate(rule_of(product), decision(361999))])
     assert storage.published == []
 
@@ -328,7 +324,7 @@ def test_catalogue_with_nothing_publishable_refuses_to_publish(
 # --- External catalogue and failures ------------------------------------------
 
 
-def test_catalogue_can_come_from_an_external_system(session: Session, manager_factory: Any) -> None:
+def test_external_catalogue_exclusions_block_publication(session: Session, manager_factory: Any) -> None:
     product = make_product(session, "SKU-1", brand=None, stores=False)
     external = StaticCatalog(
         Catalog(
@@ -345,12 +341,9 @@ def test_catalogue_can_come_from_an_external_system(session: Session, manager_fa
     )
     manager, storage = manager_factory(catalog=external)
 
-    result = manager.sync(session, MERCHANT, [PriceUpdate(rule_of(product), decision(361999))])
-
-    offer = next(iter(storage.last_feed.iter(f"{NS}offer")))
-    assert offer.findtext(f"{NS}brand") == "Apple"
-    assert offer.find(f"{NS}availabilities/{NS}availability") is not None
-    assert result.excluded == (ExcludedOffer("SKU-9", "archived in 1C"),)
+    with pytest.raises(ValueError, match="SKU-9"):
+        manager.sync(session, MERCHANT, [PriceUpdate(rule_of(product), decision(361999))])
+    assert storage.published == []
 
 
 def test_a_failed_upload_leaves_the_old_price_in_the_database(

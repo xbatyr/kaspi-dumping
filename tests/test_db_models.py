@@ -46,6 +46,7 @@ def test_schema_compiles_for_postgres() -> None:
         "price_history",
         "product_availabilities",
         "shop_settings",
+        "telegram_subscribers",
     }
     # One shop per deployment, enforced by the database rather than by hope.
     assert "CONSTRAINT ck_shop_settings_single_row CHECK (id = 1)" in ddl["shop_settings"]

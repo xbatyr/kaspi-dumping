@@ -19,7 +19,6 @@ The format, from Kaspi's partner guide (checked 2026-09-21):
           <availabilities>
             <availability available="yes" storeId="PP1" preOrder="3" stockCount="234"/>
           </availabilities>
-          <price>6418</price>
           <cityprices>
             <cityprice cityId="750000000">193000</cityprice>
           </cityprices>
@@ -29,7 +28,8 @@ The format, from Kaspi's partner guide (checked 2026-09-21):
 
 Names are case-sensitive, and the casing is not consistent: ``merchantid`` is
 lower case, while ``storeId``, ``stockCount``, ``preOrder`` and ``cityId`` are
-camel case. ``model``, ``brand`` and ``availabilities`` are mandatory.
+camel case. ``brand`` is optional, and each offer has either ``price`` or
+``cityprices``.
 
 This module is pure: it turns plain values into bytes and imports nothing from
 the database, the scraper or the rule engine.
@@ -87,15 +87,15 @@ class FeedOffer:
     model: str
     brand: str
     availabilities: tuple[Availability, ...]
-    #: Used for cities without their own price. Kaspi's guide treats price and
-    #: cityprices as alternatives, but accepts a base price next to city prices.
+    #: Used when there are no city-specific prices.
     price: Decimal | None = None
     city_prices: Mapping[str, Decimal] = field(default_factory=lambda: MappingProxyType({}))
 
     def __post_init__(self) -> None:
         _require_text(self.sku, "sku")
         _require_text(self.model, "model")
-        _require_text(self.brand, "brand")
+        if not isinstance(self.brand, str):
+            raise TypeError("brand must be a string")
         if not self.availabilities:
             raise ValueError(f"offer {self.sku!r} needs at least one availability")
         if self.price is not None:
@@ -155,11 +155,11 @@ def build_feed(
 
 
 def _append_offer(parent: ET.Element, offer: FeedOffer) -> None:
-    # Element order follows the schema's sequence: model, brand, availabilities,
-    # price, cityprices.
+    # Kaspi's schema allows an absent brand and exactly one price representation.
     element = ET.SubElement(parent, "offer", {"sku": offer.sku})
     ET.SubElement(element, "model").text = offer.model
-    ET.SubElement(element, "brand").text = offer.brand
+    if offer.brand.strip():
+        ET.SubElement(element, "brand").text = offer.brand
 
     availabilities = ET.SubElement(element, "availabilities")
     for availability in offer.availabilities:
@@ -173,12 +173,12 @@ def _append_offer(parent: ET.Element, offer: FeedOffer) -> None:
             attributes["stockCount"] = str(availability.stock_count)
         ET.SubElement(availabilities, "availability", attributes)
 
-    if offer.price is not None:
-        ET.SubElement(element, "price").text = _price_text(offer.price)
     if offer.city_prices:
         city_prices = ET.SubElement(element, "cityprices")
         for city_id, price in offer.city_prices.items():
             ET.SubElement(city_prices, "cityprice", {"cityId": city_id}).text = _price_text(price)
+    elif offer.price is not None:
+        ET.SubElement(element, "price").text = _price_text(offer.price)
 
 
 def _feed_date(generated_at: datetime | None) -> str:

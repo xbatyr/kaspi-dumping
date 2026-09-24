@@ -72,6 +72,61 @@ class RuleUpdate(RuleFields):
     """A full replacement of a rule's settings; the product and city stay put."""
 
 
+class ProductRuleConfigurationIn(RuleFields):
+    """One product's strategy, exclusions and enabled cities, saved together."""
+
+    city_ids: list[CityId] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def unique_cities(self) -> Self:
+        if len(set(self.city_ids)) != len(self.city_ids):
+            raise ValueError("city_ids must not contain duplicates")
+        return self
+
+
+class GlobalStrategyIn(BaseModel):
+    strategy: PricingStrategy
+    step: int = Field(default=1, ge=1)
+    target_position: TargetPosition | None = None
+    ignored_merchants: list[str] = Field(default_factory=list)
+    city_ids: list[CityId] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def check(self) -> Self:
+        if self.strategy in {PricingStrategy.MANUAL, PricingStrategy.FIXED_PRICE}:
+            raise ValueError("выберите стратегию автоматического демпинга")
+        if self.strategy is PricingStrategy.TARGET_POSITION and self.target_position is None:
+            raise ValueError("укажите целевую позицию")
+        if len(set(self.city_ids)) != len(self.city_ids):
+            raise ValueError("города не должны повторяться")
+        cleaned = [item.strip() for item in self.ignored_merchants]
+        if any(not item or len(item) > 64 for item in cleaned):
+            raise ValueError("неверный ID магазина в белом списке")
+        self.ignored_merchants = list(dict.fromkeys(cleaned))
+        return self
+
+
+class GlobalStrategyOut(BaseModel):
+    strategy: PricingStrategy | None
+    step: int
+    target_position: int | None
+    ignored_merchants: list[str]
+    city_ids: list[str]
+    configured_products: int
+
+
+class ProductPriceLimitsIn(BaseModel):
+    min_price: Money
+    max_price: Money
+    step: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def check(self) -> Self:
+        if self.max_price <= self.min_price:
+            raise ValueError("максимальная цена должна быть выше минимальной")
+        return self
+
+
 class RuleStatusOut(BaseModel):
     """What the repricer worked out for this rule the last time it changed the price."""
 
@@ -153,6 +208,32 @@ class BulkToggleOut(BaseModel):
     rule_ids: list[int]
 
 
+class BulkRuleUpdateIn(BaseModel):
+    """Change selected fields on existing rules in one atomic operation."""
+
+    rule_ids: list[int] = Field(min_length=1, max_length=1000)
+    strategy: PricingStrategy | None = None
+    min_price: Money | None = None
+    max_price: Money | None = None
+    step: int | None = Field(default=None, ge=1)
+    target_position: TargetPosition | None = None
+    ignored_merchants: list[str] | None = None
+    is_active: bool | None = None
+
+    @model_validator(mode="after")
+    def check_changes(self) -> Self:
+        if not (self.model_fields_set - {"rule_ids"}):
+            raise ValueError("choose at least one setting to change")
+        if "target_position" in self.model_fields_set and self.target_position is None:
+            raise ValueError("target_position must be a number")
+        if self.ignored_merchants is not None:
+            cleaned = [merchant.strip() for merchant in self.ignored_merchants]
+            if any(not merchant for merchant in cleaned):
+                raise ValueError("ignored_merchants must not contain empty IDs")
+            self.ignored_merchants = list(dict.fromkeys(cleaned))
+        return self
+
+
 class HistoryEntryOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -213,9 +294,10 @@ class ProductIn(BaseModel):
     sku: Sku
     title: str = Field(min_length=1, max_length=512)
     kaspi_product_id: str = Field(
-        pattern=r"^\d{1,64}$",
+        default="",
+        pattern=r"^\d{0,64}$",
         examples=["102298404"],
-        description="Digits from kaspi.kz/shop/p/<slug>-<ID>/ — what the scraper watches.",
+        description="Digits from the product card URL. Empty until a Kaspi XML import is linked.",
     )
     brand: str | None = Field(default=None, max_length=128)
     base_price: Money | None = Field(
@@ -226,6 +308,15 @@ class ProductIn(BaseModel):
     #: Per-city settings created or updated along with the product. Cities left
     #: out keep whatever they had: an import never silently drops a rule.
     rules: list[RuleInline] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def check_card_for_repricing(self) -> Self:
+        if not self.kaspi_product_id and any(
+            rule.strategy not in {PricingStrategy.MANUAL, PricingStrategy.FIXED_PRICE}
+            for rule in self.rules
+        ):
+            raise ValueError("привяжите ID карточки Kaspi перед включением демпинга")
+        return self
 
 
 class ProductOut(BaseModel):
@@ -258,6 +349,15 @@ class ImportResult(BaseModel):
     errors: list[ImportError] = Field(default_factory=list)
 
 
+class XmlImportResult(BaseModel):
+    total: int
+    created: int
+    updated: int
+    unlinked: int
+    inferred_cards: int
+    preview: bool
+
+
 class SettingsOut(BaseModel):
     """What the settings screen shows. The Telegram token comes back masked."""
 
@@ -275,6 +375,7 @@ class SettingsOut(BaseModel):
 
 
 class SettingsIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     merchant_id: str = Field(
         default="", max_length=64, description="ID вашего магазина на Kaspi."
     )
@@ -284,8 +385,6 @@ class SettingsIn(BaseModel):
     worker_enabled: bool = False
     interval_seconds: int = Field(default=300, ge=60, le=86_400)
     request_interval: float = Field(default=2, ge=0, le=60)
-    #: None keeps the stored token, "" clears it, anything else replaces it.
-    telegram_bot_token: str | None = None
     telegram_chat_ids: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -316,6 +415,8 @@ class StatusOut(BaseModel):
     last_run_at: datetime | None
     changes_today: int
     feed_ready: bool
+    worker_enabled: bool
+    global_strategy_configured: bool
 
 
 class ProductCardOut(BaseModel):
