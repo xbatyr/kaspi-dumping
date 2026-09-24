@@ -1,8 +1,12 @@
 # Oracle Cloud: один магазин, один сервер
 
-Этот стек рассчитан на VM.Standard.A1.Flex с Ubuntu Arm64 в домашнем регионе
-Oracle. В Always Free сейчас доступны суммарно 2 OCPU и 12 ГБ RAM; при создании
-нужно выбрать форму и диск с пометкой **Always Free Eligible**.
+Стек работает на Always Free VM в домашнем регионе Oracle. Предпочтительна
+VM.Standard.A1.Flex (до 2 OCPU и 12 ГБ RAM суммарно). Когда A1 недоступна из-за
+нехватки мощности, можно использовать VM.Standard.E2.1.Micro с Ubuntu x86_64.
+У Micro только 1 ГБ RAM: добавьте 4 ГБ swap до сборки и собирайте образы
+последовательно (`docker compose build api`, затем `docker compose build web`).
+После первой сборки запускайте контейнеры с `--no-build`. Выбирайте форму и
+диск с пометкой **Always Free Eligible**.
 
 ## Сеть и домен
 
@@ -10,7 +14,9 @@ Oracle. В Always Free сейчас доступны суммарно 2 OCPU и 
    для всех, TCP 22 только для IP администратора. Порты 3000, 5432 и 8000 не
    открываются.
 2. В DuckDNS создаётся `kaspi-repricer.duckdns.org` с IPv4 этой VM. Если имя
-   занято, берётся другое и его записывают в `SITE_DOMAIN`.
+   занято, берётся другое и его записывают в `SITE_DOMAIN`. При временной
+   недоступности DuckDNS можно начать с имени вида
+   `kaspi-repricer.132-145-102-181.sslip.io`, подставив IP своей VM.
 3. Caddy автоматически получает и обновляет HTTPS-сертификат после появления
    DNS-записи и доступа к портам 80/443.
 
@@ -34,12 +40,16 @@ cp .env.example .env
 ```bash
 chmod 600 .env
 sudo docker compose config --quiet
-sudo docker compose up -d --build
+sudo docker compose build api
+sudo docker compose build web
+sudo docker compose up -d --no-build
 sudo docker compose ps
 ```
 
 После запуска панель доступна по `https://kaspi-repricer.duckdns.org/`, а
-прайс — по `https://kaspi-repricer.duckdns.org/feed/kaspi.xml`. Панель требует
+прайс — по `https://kaspi-repricer.duckdns.org/feed/kaspi.xml`. Также работает
+ссылка с именем `kaspi-price-list-{merchantid}.xml`, которую пишет воркер.
+Панель требует
 логин и пароль из `.env`. Фид доступен Kaspi без пароля. Проверка:
 
 ```bash
