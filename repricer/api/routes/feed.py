@@ -67,6 +67,16 @@ def kaspi_feed(request: Request, session: SessionDep, merchant: MerchantDep) -> 
     )
 
 
+@router.get("/feed/kaspi-price-list-{merchant_id}.xml", include_in_schema=False)
+def kaspi_feed_named(
+    merchant_id: str, request: Request, session: SessionDep, merchant: MerchantDep
+) -> Response:
+    """Serve the same live feed at the URL reported by the worker."""
+    if merchant_id != merchant.merchant_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "feed not found")
+    return kaspi_feed(request, session, merchant)
+
+
 def _offers_etag(offers: list[FeedOffer]) -> str:
     digest = sha256()
     for offer in offers:
