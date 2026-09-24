@@ -225,14 +225,38 @@ def test_our_own_offer_is_not_treated_as_a_competitor(session: Session, build_wo
     client = FakeKaspiClient(
         {(IPHONE, ALMATY): [competitor(MERCHANT.merchant_id, 362000), competitor("rival", 370000)]}
     )
-    worker, _, _ = build_worker(client)
+    sink = FakeSink()
+    worker, storage, _ = build_worker(client, price_updates=sink)
 
     with worker:
-        worker.run_once()
+        first = worker.run_once()
+        second = worker.run_once()
 
     session.expire_all()
-    # Undercutting ourselves would walk the price down to min_price every cycle.
-    assert session.scalars(select(RepricerRule)).one().current_price == Decimal(369999)
+    assert session.scalars(select(RepricerRule)).one().current_price == Decimal(362000)
+    assert first.changed == second.changed == 0
+    assert storage.published == []
+    assert sink.messages == []
+
+
+def test_pending_xml_price_in_first_place_does_not_spam(
+    session: Session, build_worker: Any
+) -> None:
+    make_product(session, "IPH", IPHONE, cities={ALMATY: 362000})
+    client = FakeKaspiClient(
+        {(IPHONE, ALMATY): [competitor(MERCHANT.merchant_id, 390000), competitor("rival", 370000)]}
+    )
+    sink = FakeSink()
+    worker, storage, _ = build_worker(client, price_updates=sink)
+
+    with worker:
+        first = worker.run_once()
+        second = worker.run_once()
+
+    assert first.changed == second.changed == 0
+    assert session.scalars(select(RepricerRule)).one().current_price == Decimal(362000)
+    assert storage.published == []
+    assert sink.messages == []
 
 
 def test_unchanged_price_is_reported_but_publishes_nothing(

@@ -85,6 +85,44 @@ def test_unchanged_price_is_reported_as_unchanged() -> None:
     assert not decision.changed
 
 
+def test_already_first_keeps_price_despite_competitor_movement() -> None:
+    decision = engine.evaluate(
+        config(step=2), [offer(OWN, 1900), offer("rival", 1825)], current_price=Decimal(1820)
+    )
+
+    assert decision.new_price == 1820
+    assert decision.reason is DecisionReason.ALREADY_FIRST
+    assert decision.expected_position == 1
+    assert not decision.changed
+
+
+def test_already_first_requires_our_live_offer() -> None:
+    decision = engine.evaluate(config(step=2), [offer("rival", 1825)], current_price=Decimal(1820))
+
+    assert decision.new_price == 1823
+    assert decision.reason is DecisionReason.STRATEGY_TARGET
+
+
+def test_already_first_does_not_hide_feed_price_that_would_lose() -> None:
+    decision = engine.evaluate(
+        config(step=2), [offer(OWN, 1820), offer("rival", 1825)], current_price=Decimal(1830)
+    )
+
+    assert decision.new_price == 1823
+    assert decision.reason is DecisionReason.STRATEGY_TARGET
+
+
+def test_already_first_still_respects_price_limits() -> None:
+    decision = engine.evaluate(
+        config(min_price=1800, step=2),
+        [offer(OWN, 1790), offer("rival", 1825)],
+        current_price=Decimal(1790),
+    )
+
+    assert decision.new_price == 1823
+    assert decision.reason is DecisionReason.STRATEGY_TARGET
+
+
 # --- Filtering --------------------------------------------------------------
 
 

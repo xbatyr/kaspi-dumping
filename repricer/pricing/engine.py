@@ -29,12 +29,13 @@ class PricingEngine:
     Evaluation:
       1. Drop our own offer (taking our live rating from it), ignored merchants
          and duplicate listings of the same store; rank the rest.
-      2. No competitors left: price at ``max_price``.
-      3. Apply the selected strategy against the leader (position 1).
-      4. If that lands below ``min_price``, fall back to «Борьба за 2-20 место»:
+      2. Keep the XML price when it already ranks first and our offer is visible.
+      3. No competitors left: price at ``max_price``.
+      4. Apply the selected strategy against the leader (position 1).
+      5. If that lands below ``min_price``, fall back to «Борьба за 2-20 место»:
          take the best position in 2..N reachable without breaching
          ``min_price``; if none is reachable, pin to ``min_price``.
-      5. Cap at ``max_price``.
+      6. Cap at ``max_price``.
 
     The result is always a whole-tenge price within [min_price, max_price].
     """
@@ -56,6 +57,7 @@ class PricingEngine:
         include our own. ``current_price`` is only used to report whether the
         price changed.
         """
+        offers = tuple(offers)
         competitors, own_rating = _rank_competitors(config, offers)
 
         def decide(
@@ -83,6 +85,17 @@ class PricingEngine:
             if base_price < config.floor_price:
                 return decide(config.floor_price, DecisionReason.PINNED_TO_MIN, None)
             return decide(base_price, DecisionReason.FIXED_PRICE, None)
+
+        # The XML feed can be ahead of Kaspi's displayed price while Kaspi has
+        # not fetched it yet. Once the feed price would rank first, leave it
+        # alone instead of chasing a rival's small moves every cycle.
+        if (
+            current_price is not None
+            and any(offer.merchant_id == config.own_merchant_id for offer in offers)
+            and config.floor_price <= current_price <= config.ceiling_price
+            and _expected_position(current_price, competitors, own_rating) == 1
+        ):
+            return decide(current_price, DecisionReason.ALREADY_FIRST, None)
 
         if not competitors:
             return decide(config.ceiling_price, DecisionReason.NO_COMPETITORS, None)
