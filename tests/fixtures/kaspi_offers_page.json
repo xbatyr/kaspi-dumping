@@ -1,0 +1,113 @@
+{
+  "offers": [
+    {
+      "masterSku": "102298404",
+      "masterCategory": "Master - Smartphones",
+      "merchantId": "11271005",
+      "merchantName": "Tehno Trade",
+      "merchantSku": "102298404",
+      "merchantReviewsQuantity": 231,
+      "merchantRating": 4.8,
+      "title": "Смартфон Apple iPhone 13 128Gb Midnight черный",
+      "price": 361788.0,
+      "delivery": "2026-09-21T18:00:00.000+00:00",
+      "deliveryMovedBySlot": false,
+      "kdPickupDate": "2026-09-19T15:00:00.000+00:00",
+      "availabilityDate": "2026-09-18T17:52:23.745+00:00",
+      "kaspiDelivery": true,
+      "kdPoints": [
+        "11271005_PP1"
+      ],
+      "preorder": 0,
+      "locatedInPoint": "11271005_PP1",
+      "deliveryType": "TO_DOOR",
+      "deliveryDuration": "TILL_5_DAYS",
+      "postomat": "2026-09-21T18:00:00.000+00:00"
+    },
+    {
+      "masterSku": "102298404",
+      "masterCategory": "Master - Smartphones",
+      "merchantId": "30463420",
+      "merchantName": "MOOD PLACE",
+      "merchantSku": "102298404_940231519",
+      "title": "Apple iPhone 13 128Gb NanoSIM+eSIM черный",
+      "price": 361794.0,
+      "delivery": "2026-09-24T09:00:00.000+00:00",
+      "deliveryMovedBySlot": false,
+      "kdPickupDate": "2026-09-24T05:55:00.000+00:00",
+      "availabilityDate": "2026-09-23T19:00:00.000+00:00",
+      "pickup": "2026-09-24T19:00:00.000+00:00",
+      "kaspiDelivery": false,
+      "kdPoints": [
+        "30463420_PP1"
+      ],
+      "pointsWithAvailability": [
+        "30463420_PP1"
+      ],
+      "preorder": 5,
+      "locatedInPoint": "30463420_PP1",
+      "deliveryType": "EXPRESS",
+      "deliveryDuration": "TILL_7_DAYS",
+      "postomat": "2026-09-25T18:00:00.000+00:00"
+    },
+    {
+      "masterSku": "102298404",
+      "masterCategory": "Master - Smartphones",
+      "merchantId": "12942011",
+      "merchantName": "ProUnit",
+      "merchantSku": "102298404_051036011",
+      "merchantReviewsQuantity": 272,
+      "merchantRating": 4.9,
+      "title": "Смартфон Apple iPhone 13 128Gb NanoSIM+eSIM черный",
+      "price": 362000.0,
+      "delivery": "2026-09-19T08:00:00.000+00:00",
+      "deliveryMovedBySlot": false,
+      "kdPickupDate": "2026-09-19T04:55:00.000+00:00",
+      "availabilityDate": "2026-09-18T19:00:00.000+00:00",
+      "pickup": "2026-09-18T19:00:00.000+00:00",
+      "kaspiDelivery": false,
+      "kdPoints": [
+        "12942011_2"
+      ],
+      "pointsWithAvailability": [
+        "12942011_2"
+      ],
+      "preorder": 0,
+      "locatedInPoint": "12942011_2",
+      "deliveryType": "EXPRESS",
+      "deliveryDuration": "TOMORROW",
+      "postomat": "2026-09-20T18:00:00.000+00:00"
+    },
+    {
+      "masterSku": "102298404",
+      "masterCategory": "Master - Smartphones",
+      "merchantId": "3932001",
+      "merchantName": "Gadgetkz АВТОРИЗОВАННЫЙ МАГАЗИН",
+      "merchantSku": "102298404_393455",
+      "merchantReviewsQuantity": 146,
+      "merchantRating": 4.9,
+      "title": "Apple iPhone 13 128Gb NanoSIM+eSIM черный",
+      "price": 362000.0,
+      "delivery": "2026-09-19T09:00:00.000+00:00",
+      "deliveryMovedBySlot": false,
+      "kdPickupDate": "2026-09-19T05:55:00.000+00:00",
+      "availabilityDate": "2026-09-18T17:52:23.745+00:00",
+      "pickup": "2026-09-18T19:00:00.000+00:00",
+      "kaspiDelivery": true,
+      "kdPoints": [
+        "3932001_PP3"
+      ],
+      "pointsWithAvailability": [
+        "3932001_PP3"
+      ],
+      "preorder": 0,
+      "locatedInPoint": "3932001_PP3",
+      "deliveryType": "EXPRESS",
+      "deliveryDuration": "TOMORROW",
+      "postomat": "2026-09-20T18:00:00.000+00:00"
+    }
+  ],
+  "total": 20,
+  "offersCount": 20,
+  "pcmResponsePresent": false
+}

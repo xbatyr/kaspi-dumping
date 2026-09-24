@@ -1,0 +1,3 @@
+[console_scripts]
+repricer = repricer.cli:app
+repricer-bot = repricer.telegram.cli:app
