@@ -1,0 +1,11 @@
+.git
+.env
+.env.*
+.mypy_cache
+.pytest_cache
+.playwright-cli
+*.egg-info
+**/__pycache__
+frontend
+tests
+feeds

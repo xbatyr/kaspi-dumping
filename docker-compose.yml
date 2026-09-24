@@ -1,17 +1,15 @@
-# Весь репрайсер одной командой: docker compose up -d
-#
-# Перед запуском скопируйте .env.example в .env и задайте REPRICER_API_KEY,
-# DASHBOARD_PASSWORD и POSTGRES_PASSWORD. Остальное заказчик заполнит в панели.
+# Одна VM: база, API, воркер, Telegram, панель и публичный HTTPS через Caddy.
+# Секреты живут только в .env на сервере; наружу открыты только 80/443.
 
 services:
   db:
-    image: postgres:17-alpine
+    image: postgres:18-alpine
     environment:
       POSTGRES_DB: repricer
       POSTGRES_USER: repricer
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?задайте POSTGRES_PASSWORD в .env}
     volumes:
-      - db-data:/var/lib/postgresql/data
+      - db-data:/var/lib/postgresql
     healthcheck:
       # Остальные сервисы ждут, пока база действительно начнёт отвечать.
       test: ["CMD-SHELL", "pg_isready -U repricer -d repricer"]
@@ -36,9 +34,6 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://repricer:${POSTGRES_PASSWORD}@db:5432/repricer
       REPRICER_API_KEY: ${REPRICER_API_KEY:?задайте REPRICER_API_KEY в .env}
-    ports:
-      # Наружу смотрит только фид: его забирает Kaspi. Остальное закрыто ключом.
-      - "${API_PORT:-8000}:8000"
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -50,8 +45,8 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://repricer:${POSTGRES_PASSWORD}@db:5432/repricer
       FEED_DIR: /app/feeds
-    volumes:
-      - feeds:/app/feeds
+      FEED_BASE_URL: https://${SITE_DOMAIN:?задайте SITE_DOMAIN в .env}/feed
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?задайте TELEGRAM_BOT_TOKEN в .env}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -62,6 +57,7 @@ services:
     command: repricer-bot
     environment:
       DATABASE_URL: postgresql+psycopg://repricer:${POSTGRES_PASSWORD}@db:5432/repricer
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?задайте TELEGRAM_BOT_TOKEN в .env}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -74,13 +70,28 @@ services:
       REPRICER_API_KEY: ${REPRICER_API_KEY}
       DASHBOARD_USER: ${DASHBOARD_USER:-owner}
       DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:?задайте DASHBOARD_PASSWORD в .env}
-      FEED_PUBLIC_URL: ${FEED_PUBLIC_URL:-http://localhost:8000/feed/kaspi.xml}
-    ports:
-      - "${WEB_PORT:-3000}:3000"
+      FEED_PUBLIC_URL: https://${SITE_DOMAIN:?задайте SITE_DOMAIN в .env}/feed/kaspi.xml
     depends_on:
       - api
     restart: unless-stopped
 
+  caddy:
+    image: caddy:2-alpine
+    environment:
+      SITE_DOMAIN: ${SITE_DOMAIN:?задайте SITE_DOMAIN в .env}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/oracle/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - api
+      - web
+    restart: unless-stopped
+
 volumes:
   db-data:
-  feeds:
+  caddy-data:
+  caddy-config:

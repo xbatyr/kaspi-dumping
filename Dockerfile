@@ -15,7 +15,7 @@ COPY alembic.ini ./
 COPY alembic ./alembic
 
 # Не root: если кто-то пролезет через парсер, прав у него не будет.
-RUN useradd --create-home --uid 10001 repricer && chown -R repricer /app
+RUN useradd --create-home --uid 10001 repricer && mkdir -p /app/feeds && chown -R repricer /app
 USER repricer
 
 CMD ["uvicorn", "repricer.api.app:app", "--host", "0.0.0.0", "--port", "8000"]

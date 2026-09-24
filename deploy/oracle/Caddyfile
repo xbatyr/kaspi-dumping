@@ -1,0 +1,12 @@
+{$SITE_DOMAIN} {
+    encode zstd gzip
+
+    @kaspi_feed path /feed/kaspi.xml
+    handle @kaspi_feed {
+        reverse_proxy api:8000
+    }
+
+    handle {
+        reverse_proxy web:3000
+    }
+}
