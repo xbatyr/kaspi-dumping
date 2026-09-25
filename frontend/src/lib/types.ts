@@ -28,6 +28,10 @@ export interface Rule {
   strategy: Strategy;
   min_price: Money;
   max_price: Money;
+  /** Set when the limit was entered as a share of the product's own price;
+   *  the tenge figures above then follow that price. */
+  min_percent: string | null;
+  max_percent: string | null;
   step: number;
   target_position: number | null;
   ignored_merchants: string[];
@@ -38,6 +42,26 @@ export interface Rule {
   last_change: RuleStatus | null;
 }
 
+export interface Margin {
+  price: Money;
+  commission: Money;
+  tax: Money;
+  delivery: Money;
+  purchase_price: Money;
+  profit: Money;
+  margin_percent: string;
+  markup_percent: string | null;
+  break_even_price: Money | null;
+  /** No purchase price is known, so the profit shown is the optimistic one. */
+  estimated: boolean;
+}
+
+export interface ProductMargins {
+  current: Margin | null;
+  minimum: Margin | null;
+  maximum: Margin | null;
+}
+
 export interface ProductRules {
   sku: string;
   title: string;
@@ -45,11 +69,47 @@ export interface ProductRules {
   brand: string | null;
   base_price: Money | null;
   is_active: boolean;
+  /** Switched on and in stock somewhere: what the "на продаже" filter means. */
+  on_sale: boolean;
   purchase_price: Money | null;
+  category: string | null;
+  commission_percent: string | null;
+  delivery_cost: Money | null;
   auto_decrease: boolean;
   auto_increase: boolean;
   availabilities: AvailabilityDraft[];
   rules: Rule[];
+  margins: ProductMargins;
+}
+
+export interface Category {
+  name: string | null;
+  products: number;
+}
+
+/** The filters above the catalogue, kept in the page URL. */
+export interface CatalogFilters {
+  q: string;
+  bot: string;
+  sale: string;
+  category: string;
+  sort: string;
+}
+
+export interface BulkTools {
+  skus?: string[];
+  set_min_percent?: string;
+  set_max_percent?: string;
+  raise_to_max?: boolean;
+  disable_decrease_when_off_sale?: boolean;
+}
+
+export interface BulkToolsResult {
+  products_seen: number;
+  limits_set: number;
+  prices_raised: number;
+  decrease_disabled: number;
+  skipped: Record<string, number>;
 }
 
 export interface RuleList {
@@ -75,6 +135,7 @@ export interface GlobalStrategy {
 
 export interface GlobalStrategyDraft {
   strategy: Strategy;
+  step: number;
   target_position: number | null;
   ignored_merchants: string[];
   city_ids: string[];
@@ -98,9 +159,22 @@ export interface AvailabilityDraft {
 
 export interface ProductManagement {
   purchase_price?: Money | null;
+  category?: string | null;
+  commission_percent?: string | null;
+  delivery_cost?: Money | null;
   auto_decrease?: boolean;
   auto_increase?: boolean;
+  is_active?: boolean;
   availabilities?: AvailabilityDraft[];
+}
+
+/** One side may be given in tenge or in percent, never both. */
+export interface PriceLimitsDraft {
+  min_price?: string;
+  max_price?: string;
+  min_percent?: string;
+  max_percent?: string;
+  step?: number;
 }
 
 export interface RuleDraftInline {
@@ -187,6 +261,9 @@ export interface Settings {
   telegram_configured: boolean;
   telegram_chat_ids: string[];
   is_ready: boolean;
+  tax_percent: string;
+  commission_percent: string;
+  delivery_cost: Money;
 }
 
 export interface SettingsDraft {
@@ -198,6 +275,9 @@ export interface SettingsDraft {
   interval_seconds: number;
   request_interval: number;
   telegram_chat_ids: string[];
+  tax_percent: string;
+  commission_percent: string;
+  delivery_cost: string;
 }
 
 export interface KaspiCard {

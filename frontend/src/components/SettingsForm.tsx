@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { AlertTriangle, CheckCircle2, Loader2, Play, Send, Shield, Store } from "lucide-react";
+import { AlertTriangle, Calculator, CheckCircle2, Loader2, Play, Send, Shield, Store } from "lucide-react";
 
 import { saveSettings } from "@/lib/client";
 import type { Settings } from "@/lib/types";
@@ -20,6 +20,9 @@ export function SettingsForm({ settings }: { settings: Settings }) {
   const [interval, setInterval] = useState(String(settings.interval_seconds));
   const [requestInterval, setRequestInterval] = useState(String(settings.request_interval));
   const [chats, setChats] = useState(settings.telegram_chat_ids.join(", "));
+  const [tax, setTax] = useState(String(Number(settings.tax_percent)));
+  const [commission, setCommission] = useState(String(Number(settings.commission_percent)));
+  const [delivery, setDelivery] = useState(String(Number(settings.delivery_cost)));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -44,6 +47,9 @@ export function SettingsForm({ settings }: { settings: Settings }) {
           .split(/[\n,]/)
           .map((line) => line.trim())
           .filter(Boolean),
+        tax_percent: tax.replace(",", ".") || "0",
+        commission_percent: commission.replace(",", ".") || "0",
+        delivery_cost: delivery.replace(",", ".") || "0",
       });
       setSaved(true);
       router.refresh();
@@ -116,6 +122,21 @@ export function SettingsForm({ settings }: { settings: Settings }) {
             placeholder="2"
             hint="Чем меньше, тем выше риск, что Kaspi ограничит ваш IP."
           />
+        </div>
+      </Card>
+
+      <Card
+        icon={Calculator}
+        title="Расчёт маржинальности"
+        hint="По этим числам считается прибыль в каталоге. У товара можно задать свои комиссию и доставку."
+      >
+        <div className="grid gap-3 sm:grid-cols-3">
+          <Field label="Налог, %" value={tax} onChange={setTax} placeholder="3"
+            hint="Розничный налог с оборота в Казахстане — 3%." />
+          <Field label="Комиссия Kaspi, %" value={commission} onChange={setCommission} placeholder="12"
+            hint="Из вашего договора: обычно 8–15% в зависимости от категории." />
+          <Field label="Средняя доставка, ₸" value={delivery} onChange={setDelivery} placeholder="1500"
+            hint="Сколько в среднем стоит доставить один заказ." />
         </div>
       </Card>
 

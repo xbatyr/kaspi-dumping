@@ -2,25 +2,26 @@ import Link from "next/link";
 import { AlertTriangle, Store } from "lucide-react";
 
 import { ProductsTable } from "@/components/ProductsTable";
-import { ApiError, feedUrl, fetchCities, fetchRules, fetchStatus } from "@/lib/api";
-import type { City, RuleList, Status } from "@/lib/types";
+import { ApiError, feedUrl, fetchCategories, fetchCities, fetchRules, fetchStatus } from "@/lib/api";
+import type { CatalogFilters, Category, City, RuleList, Status } from "@/lib/types";
 
 const PAGE_SIZE = 50;
 
 type Loaded =
-  | { ok: true; data: RuleList; cities: City[]; status: Status }
+  | { ok: true; data: RuleList; cities: City[]; categories: Category[]; status: Status }
   | { ok: false; message: string; needsSetup: boolean };
 
 /** Keeps the fetching (and its try/catch) away from the JSX: a try block around
  *  rendering would not catch render errors anyway. */
-async function load(search: string, offset: number, bot: string, sort: string): Promise<Loaded> {
+async function load(filters: CatalogFilters, offset: number): Promise<Loaded> {
   try {
-    const [data, cities, status] = await Promise.all([
-      fetchRules({ search, limit: PAGE_SIZE, offset, bot, sort }),
+    const [data, cities, categories, status] = await Promise.all([
+      fetchRules({ ...filters, search: filters.q, limit: PAGE_SIZE, offset }),
       fetchCities(),
+      fetchCategories(),
       fetchStatus(),
     ]);
-    return { ok: true, data, cities, status };
+    return { ok: true, data, cities, categories, status };
   } catch (error) {
     return {
       ok: false,
@@ -33,10 +34,14 @@ async function load(search: string, offset: number, bot: string, sort: string): 
 export default async function DashboardPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; offset?: string; bot?: string; sort?: string }>;
+  searchParams: Promise<{
+    q?: string; offset?: string; bot?: string; sale?: string; category?: string; sort?: string;
+  }>;
 }) {
-  const { q = "", offset = "0", bot = "all", sort = "sku" } = await searchParams;
-  const result = await load(q, Number(offset) || 0, bot, sort);
+  const { q = "", offset = "0", bot = "all", sale = "all", category = "", sort = "sku" } =
+    await searchParams;
+  const filters: CatalogFilters = { q, bot, sale, category, sort };
+  const result = await load(filters, Number(offset) || 0);
 
   if (!result.ok && result.needsSetup) {
     return (
@@ -75,11 +80,10 @@ export default async function DashboardPage({
     <ProductsTable
       data={result.data}
       cities={result.cities}
+      categories={result.categories}
       status={result.status}
       feedUrl={feedUrl()}
-      search={q}
-      bot={bot}
-      sort={sort}
+      filters={filters}
     />
   );
 }

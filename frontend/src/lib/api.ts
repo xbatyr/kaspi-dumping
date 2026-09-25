@@ -4,7 +4,15 @@
  *  /api/* to it, so there is one origin and no CORS to configure.
  */
 
-import type { City, GlobalStrategy, ProductRules, RuleList, Settings, Status } from "@/lib/types";
+import type {
+  Category,
+  City,
+  GlobalStrategy,
+  ProductRules,
+  RuleList,
+  Settings,
+  Status,
+} from "@/lib/types";
 
 const API_URL = process.env.API_URL ?? "http://127.0.0.1:8000";
 const API_KEY = process.env.REPRICER_API_KEY ?? "";
@@ -53,18 +61,26 @@ async function get<T>(path: string, init?: RequestInit): Promise<T> {
 export function fetchRules(params: {
   search?: string;
   bot?: string;
+  sale?: string;
+  category?: string;
   sort?: string;
   limit?: number;
   offset?: number;
 }): Promise<RuleList> {
   const query = new URLSearchParams();
   if (params.bot) query.set("bot", params.bot);
+  if (params.sale && params.sale !== "all") query.set("sale", params.sale);
+  if (params.category) query.set("category", params.category);
   if (params.sort) query.set("sort", params.sort);
   if (params.search) query.set("search", params.search);
   query.set("limit", String(params.limit ?? 50));
   query.set("offset", String(params.offset ?? 0));
   // Always fresh: this is a control panel, a cached price is a wrong price.
   return get<RuleList>(`/api/rules?${query}`, { cache: "no-store" });
+}
+
+export function fetchCategories(): Promise<Category[]> {
+  return get<Category[]>("/api/rules/categories", { cache: "no-store" });
 }
 
 export function fetchCities(): Promise<City[]> {

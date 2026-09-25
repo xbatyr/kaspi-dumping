@@ -16,6 +16,7 @@ export function GlobalStrategyEditor({ current, cities, defaultCity }: {
   const router = useRouter();
   const [strategy, setStrategy] = useState<Strategy>(current.strategy ?? "beat_first");
   const [position, setPosition] = useState(String(current.target_position ?? 2));
+  const [step, setStep] = useState(String(current.step ?? 1));
   const [merchants, setMerchants] = useState(current.ignored_merchants);
   const [cityIds, setCityIds] = useState(current.city_ids.length ? current.city_ids : [defaultCity]);
   const [saving, setSaving] = useState(false);
@@ -24,10 +25,12 @@ export function GlobalStrategyEditor({ current, cities, defaultCity }: {
 
   async function save() {
     if (cityIds.length === 0) { setError("Выберите хотя бы один город"); return; }
+    if (!Number.isInteger(Number(step)) || Number(step) < 1) { setError("Шаг должен быть целым числом от 1 ₸"); return; }
     setSaving(true); setError(null); setSaved(false);
     try {
       await saveGlobalStrategy({
         strategy,
+        step: Number(step),
         target_position: strategy === "target_position" ? Number(position) : null,
         ignored_merchants: merchants, city_ids: cityIds,
       });
@@ -52,8 +55,12 @@ export function GlobalStrategyEditor({ current, cities, defaultCity }: {
             <span><span className="block font-medium text-slate-900">{card.title}</span><span className="text-xs text-slate-500">{card.hint}</span></span>
           </label>)}
         </div>
-        <div className="mt-3 flex flex-wrap gap-3">
+        <div className="mt-3 flex flex-wrap items-end gap-4">
           {strategy === "target_position" && <label className="text-sm text-slate-700">Место <select value={position} onChange={(event) => setPosition(event.target.value)} className="ml-2 rounded-lg border border-slate-300 px-2 py-1">{Array.from({ length: 19 }, (_, index) => index + 2).map((place) => <option key={place} value={place}>{place}</option>)}</select></label>}
+          <label className="text-sm text-slate-700">Шаг цены, ₸
+            <input type="number" min={1} step={1} value={step} onChange={(event) => setStep(event.target.value)} className="ml-2 w-24 rounded-lg border border-slate-300 px-2 py-1" />
+            <span className="mt-1 block max-w-md text-xs leading-5 text-slate-500">На сколько тенге бот отличает вашу цену от цены конкурента. Шаг по умолчанию для всего магазина: если у товара задан свой шаг, бот берёт его.</span>
+          </label>
         </div>
       </fieldset>
       <CityPicker cities={cities} selected={cityIds} onChange={setCityIds} configured={new Set(current.city_ids)} />

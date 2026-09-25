@@ -8,14 +8,26 @@ from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
+from repricer.api.catalog_query import (
+    bot_filter,
+    category_filter,
+    order_by,
+    product_margins,
+    sale_filter,
+    search_filter,
+)
 from repricer.api.deps import MerchantDep, SessionDep
 from repricer.api.security import ApiKeyGuard
 from repricer.api.schemas import (
+    NO_CATEGORY,
     AvailabilityIn,
     BulkToggleIn,
     BulkToggleOut,
     BulkRuleUpdateIn,
+    CategoryOut,
     ProductRulesOut,
+    ProductSort,
+    SaleFilter,
     ProductRuleConfigurationIn,
     RuleCreate,
     RuleListOut,
@@ -25,7 +37,7 @@ from repricer.api.schemas import (
 )
 from repricer.db.models import PriceHistory, Product, RepricerRule
 from repricer.db.queries import latest_changes
-from repricer.db.settings_store import settings_or_none
+from repricer.db.settings_store import load_settings, settings_or_none
 from repricer.pricing import PricingStrategy
 from repricer.uploader import MerchantIdentity
 
@@ -82,21 +94,28 @@ def list_rules(
     is_active: Annotated[bool | None, Query(description="Filter rules by their switch.")] = None,
     search: Annotated[str | None, Query(description="Substring of the SKU or title.")] = None,
     bot: Literal["all", "enabled", "disabled", "unlinked"] = "all",
-    sort: Literal["sku", "title"] = "sku",
+    sale: Annotated[
+        SaleFilter, Query(description="on: switched on and in stock; off: everything else.")
+    ] = "all",
+    category: Annotated[
+        str | None, Query(description=f"Exact category, or {NO_CATEGORY} for uncategorised.")
+    ] = None,
+    sort: ProductSort = "sku",
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> RuleListOut:
+    shop = load_settings(session)
     filters = [Product.merchant_id == merchant.merchant_id]
-    enabled = Product.rules.any(RepricerRule.is_active & (RepricerRule.strategy != PricingStrategy.MANUAL))
-    if bot == "enabled":
-        filters.append(enabled)
-    elif bot == "disabled":
-        filters.append(~enabled)
-    elif bot == "unlinked":
-        filters.append(Product.kaspi_product_id == "")
-    if search:
-        pattern = f"%{search}%"
-        filters.append(or_(Product.sku.ilike(pattern), Product.title.ilike(pattern)))
+    filters += [
+        predicate
+        for predicate in (
+            bot_filter(bot),
+            sale_filter(sale),
+            category_filter(category),
+            search_filter(search),
+        )
+        if predicate is not None
+    ]
     rule_filters = []
     if city_id is not None:
         rule_filters.append(RepricerRule.city_id == city_id)
@@ -115,7 +134,7 @@ def list_rules(
         select(Product)
         .where(*filters)
         .options(selectinload(Product.rules), selectinload(Product.availabilities))
-        .order_by(Product.title if sort == "title" else Product.sku, Product.id)
+        .order_by(*order_by(sort, shop))
         .limit(limit)
         .offset(offset)
     ).all()
@@ -129,9 +148,13 @@ def list_rules(
             brand=product.brand,
             base_price=product.base_price,
             purchase_price=product.purchase_price,
+            category=product.category,
+            commission_percent=product.commission_percent,
+            delivery_cost=product.delivery_cost,
             auto_decrease=product.auto_decrease,
             auto_increase=product.auto_increase,
             is_active=product.is_active,
+            on_sale=product.on_sale(),
             availabilities=[AvailabilityIn(store_id=a.store_id, available=a.available,
                 stock_count=a.stock_count, preorder_days=a.preorder_days) for a in product.availabilities],
             rules=[
@@ -139,10 +162,36 @@ def list_rules(
                 for rule in sorted(product.rules, key=lambda rule: rule.city_id)
                 if _matches(rule, city_id, strategy, is_active)
             ],
+            # The margin belongs to a city's prices, so it follows the city the
+            # catalogue is showing; without one, the first rule stands in.
+            margins=product_margins(
+                shop,
+                product,
+                next(
+                    (rule for rule in product.rules if city_id is None or rule.city_id == city_id),
+                    None,
+                ),
+            ),
         )
         for product in products
     ]
     return RuleListOut(items=items, total=total, limit=limit, offset=offset)
+
+
+@router.get("/categories", summary="Category menu of the catalogue")
+def list_categories(session: SessionDep, merchant: MerchantDep) -> list[CategoryOut]:
+    """Every category the shop uses, with how many products are in it.
+
+    Sorted by name with the uncategorised group last, so the menu reads the same
+    way every time.
+    """
+    rows = session.execute(
+        select(Product.category, func.count())
+        .where(Product.merchant_id == merchant.merchant_id)
+        .group_by(Product.category)
+        .order_by(Product.category.asc().nulls_last())
+    ).all()
+    return [CategoryOut(name=name, products=count) for name, count in rows]
 
 
 @router.post(

@@ -26,7 +26,17 @@ from sqlalchemy.ext.mutable import MutableList
 from sqlalchemy.orm import Mapped, WriteOnlyMapped, mapped_column, relationship
 
 from repricer.db.base import Base
-from repricer.pricing import DecisionReason, PricingConfig, PricingDecision, PricingStrategy
+from repricer.pricing import (
+    DEFAULT_TAX_PERCENT,
+    DecisionReason,
+    MarginInputs,
+    PercentLimits,
+    PriceLimits,
+    PricingConfig,
+    PricingDecision,
+    PricingStrategy,
+    recalculated_limits,
+)
 
 
 def _str_enum(enum_cls: type[StrEnum], name: str) -> SAEnum:
@@ -53,8 +63,23 @@ class Product(TimestampMixin, Base):
     """Our store's listing of one Kaspi product card."""
 
     __tablename__ = "products"
-    __table_args__ = (UniqueConstraint("merchant_id", "sku"),
-        CheckConstraint("purchase_price IS NULL OR purchase_price >= 0", name="purchase_price_not_negative"))
+    __table_args__ = (
+        UniqueConstraint("merchant_id", "sku"),
+        CheckConstraint(
+            "purchase_price IS NULL OR purchase_price >= 0", name="purchase_price_not_negative"
+        ),
+        CheckConstraint(
+            "commission_percent IS NULL OR commission_percent BETWEEN 0 AND 100",
+            name="commission_percent_in_range",
+        ),
+        CheckConstraint(
+            "delivery_cost IS NULL OR delivery_cost >= 0", name="delivery_cost_not_negative"
+        ),
+        # The catalogue is always filtered by shop first, then narrowed by the
+        # category menu or the "on sale" switch.
+        Index("ix_products_merchant_category", "merchant_id", "category"),
+        Index("ix_products_merchant_active", "merchant_id", "is_active"),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
     #: Our Kaspi merchant ID (the store that owns this listing).
@@ -73,6 +98,13 @@ class Product(TimestampMixin, Base):
     #: and what FIXED_PRICE rules hold.
     base_price: Mapped[Decimal | None]
     purchase_price: Mapped[Decimal | None]
+    #: Free-form group the merchant sorts and filters by ("Системные блоки").
+    #: Taken from the Kaspi card when it is known, editable by hand.
+    category: Mapped[str | None] = mapped_column(String(128))
+    #: Kaspi's cut for this product, when it differs from the shop default.
+    commission_percent: Mapped[Decimal | None]
+    #: Average fulfilment cost of one order of this product, in tenge.
+    delivery_cost: Mapped[Decimal | None]
     auto_decrease: Mapped[bool] = mapped_column(server_default=true(), default=True)
     auto_increase: Mapped[bool] = mapped_column(server_default=false(), default=False)
     is_active: Mapped[bool] = mapped_column(server_default=true())
@@ -88,6 +120,28 @@ class Product(TimestampMixin, Base):
     price_history: WriteOnlyMapped[PriceHistory] = relationship(
         back_populates="product", passive_deletes=True
     )
+
+    def refresh_percent_limits(self) -> list[RepricerRule]:
+        """Bring percent-based limits back in line with the base price.
+
+        Every write path that touches ``base_price`` calls this, so a merchant
+        who raises their own price does not have to re-enter a stop-loss. Rules
+        set in tenge are left exactly as they are; the list returned is only the
+        rules whose limits actually moved.
+        """
+        return [rule for rule in self.rules if rule.refresh_limits(self.base_price)]
+
+    def on_sale(self) -> bool:
+        """What the catalogue filter calls "на продаже".
+
+        Being switched on is not enough: Kaspi only shows an offer that some
+        pickup point actually has, so a product with no stock anywhere reads as
+        withdrawn to the merchant and must read the same way here.
+        """
+        return self.is_active and any(
+            entry.available and (entry.stock_count is None or entry.stock_count > 0)
+            for entry in self.availabilities
+        )
 
 
 class ShopSettings(TimestampMixin, Base):
@@ -108,6 +162,11 @@ class ShopSettings(TimestampMixin, Base):
             "merchant_rating IS NULL OR merchant_rating BETWEEN 0 AND 5",
             name="rating_in_range",
         ),
+        CheckConstraint("tax_percent BETWEEN 0 AND 100", name="tax_percent_in_range"),
+        CheckConstraint(
+            "commission_percent BETWEEN 0 AND 100", name="commission_percent_in_range"
+        ),
+        CheckConstraint("delivery_cost >= 0", name="delivery_cost_not_negative"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=False, default=1)
@@ -144,6 +203,14 @@ class ShopSettings(TimestampMixin, Base):
     global_city_ids: Mapped[list[str]] = mapped_column(
         MutableList.as_mutable(ARRAY(String(16))), server_default=text("'{}'")
     )
+    # Defaults of the margin calculator. A product may override the last two.
+    #: Retail tax on turnover; 3% in Kazakhstan.
+    tax_percent: Mapped[Decimal] = mapped_column(server_default=text("3"))
+    #: Kaspi's commission from the merchant contract (usually 8–15%). Zero means
+    #: "not filled in yet", and the interface says the margin is then overstated.
+    commission_percent: Mapped[Decimal] = mapped_column(server_default=text("0"))
+    #: Average fulfilment cost of one order, in tenge.
+    delivery_cost: Mapped[Decimal] = mapped_column(server_default=text("0"))
 
     def __init__(self, **kwargs: Any) -> None:
         kwargs.setdefault("id", 1)
@@ -158,7 +225,31 @@ class ShopSettings(TimestampMixin, Base):
         kwargs.setdefault("global_step", 1)
         kwargs.setdefault("global_ignored_merchants", [])
         kwargs.setdefault("global_city_ids", [])
+        kwargs.setdefault("tax_percent", DEFAULT_TAX_PERCENT)
+        kwargs.setdefault("commission_percent", Decimal(0))
+        kwargs.setdefault("delivery_cost", Decimal(0))
         super().__init__(**kwargs)
+
+    def margin_inputs(self, price: Decimal, product: Product) -> MarginInputs:
+        """Calculator inputs for one product at one price.
+
+        The product's own commission and delivery win over the shop defaults:
+        a heavy item or a category with a different contract is the normal case,
+        not the exception.
+        """
+        return MarginInputs(
+            price=price,
+            purchase_price=product.purchase_price,
+            tax_percent=self.tax_percent,
+            commission_percent=(
+                product.commission_percent
+                if product.commission_percent is not None
+                else self.commission_percent
+            ),
+            delivery_cost=(
+                product.delivery_cost if product.delivery_cost is not None else self.delivery_cost
+            ),
+        )
 
     @property
     def is_ready(self) -> bool:
@@ -223,6 +314,12 @@ class RepricerRule(TimestampMixin, Base):
             "target_position IS NULL OR target_position BETWEEN 1 AND 20",
             name="target_position_in_range",
         ),
+        CheckConstraint(
+            "min_percent IS NULL OR min_percent BETWEEN 0 AND 90", name="min_percent_in_range"
+        ),
+        CheckConstraint(
+            "max_percent IS NULL OR max_percent BETWEEN 0 AND 500", name="max_percent_in_range"
+        ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
@@ -235,6 +332,13 @@ class RepricerRule(TimestampMixin, Base):
     #: Stop-loss floor: cost + Kaspi commission + tax + fulfilment.
     min_price: Mapped[Decimal]
     max_price: Mapped[Decimal]
+    # Limits the merchant set as a share of the product's own price. They are a
+    # recipe, not the answer: min_price/max_price above stay what the engine
+    # reads, and are recomputed from the base price whenever it changes.
+    #: Percent below the base price, e.g. 10 for "no lower than 90% of my price".
+    min_percent: Mapped[Decimal | None]
+    #: Percent above the base price.
+    max_percent: Mapped[Decimal | None]
     step: Mapped[int] = mapped_column(server_default=text("1"))
     ignored_merchants: Mapped[list[str]] = mapped_column(
         MutableList.as_mutable(ARRAY(String(64))), server_default=text("'{}'")
@@ -257,6 +361,24 @@ class RepricerRule(TimestampMixin, Base):
         kwargs.setdefault("ignored_merchants", [])
         kwargs.setdefault("is_active", True)
         super().__init__(**kwargs)
+
+    @property
+    def percent_limits(self) -> PercentLimits | None:
+        """The percentages this rule was set with, if any."""
+        if self.min_percent is None and self.max_percent is None:
+            return None
+        return PercentLimits(min_percent=self.min_percent, max_percent=self.max_percent)
+
+    def refresh_limits(self, base_price: Decimal | None) -> bool:
+        """Recompute the tenge limits from the percentages; True if they moved."""
+        updated = recalculated_limits(
+            base_price, self.percent_limits, PriceLimits(self.min_price, self.max_price)
+        )
+        if (updated.min_price, updated.max_price) == (self.min_price, self.max_price):
+            return False
+        self.min_price = updated.min_price
+        self.max_price = updated.max_price
+        return True
 
     def to_pricing_config(
         self,

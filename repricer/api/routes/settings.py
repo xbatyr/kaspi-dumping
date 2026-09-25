@@ -37,6 +37,9 @@ def update_settings(payload: SettingsIn, session: SessionDep) -> SettingsOut:
     settings.interval_seconds = payload.interval_seconds
     settings.request_interval = payload.request_interval
     settings.telegram_chat_ids = list(payload.telegram_chat_ids)
+    settings.tax_percent = payload.tax_percent
+    settings.commission_percent = payload.commission_percent
+    settings.delivery_cost = payload.delivery_cost
     session.commit()
     session.refresh(settings)
     logger.info(
@@ -63,4 +66,7 @@ def _out(settings: ShopSettings) -> SettingsOut:
         telegram_configured=bool(token),
         telegram_chat_ids=list(settings.telegram_chat_ids),
         is_ready=settings.is_ready,
+        tax_percent=settings.tax_percent,
+        commission_percent=settings.commission_percent,
+        delivery_cost=settings.delivery_cost,
     )

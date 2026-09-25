@@ -20,6 +20,7 @@ from repricer.api.routes import (
     settings,
     status,
     strategy,
+    tools,
 )
 
 DESCRIPTION = """
@@ -60,6 +61,7 @@ def create_app() -> FastAPI:
     app.include_router(rules.router)
     app.include_router(cities.router)
     app.include_router(history.router)
+    app.include_router(tools.router)
     app.include_router(feed.router)
 
     @app.get("/health", tags=["feed"], summary="Liveness probe")

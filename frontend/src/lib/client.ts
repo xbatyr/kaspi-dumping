@@ -3,6 +3,10 @@
 
 import type {
   BulkRuleChanges,
+  BulkTools,
+  BulkToolsResult,
+  Margin,
+  PriceLimitsDraft,
   GlobalStrategyDraft,
   ImportResult,
   KaspiCard,
@@ -68,12 +72,27 @@ export async function saveGlobalStrategy(draft: GlobalStrategyDraft): Promise<vo
   await send("/api/strategy", "PUT", draft);
 }
 
-export async function saveProductLimits(sku: string, minPrice: string, maxPrice: string, step: number): Promise<void> {
-  await send(`/api/strategy/products/${encodeURIComponent(sku)}/limits`, "PUT", {
-    min_price: minPrice,
-    max_price: maxPrice,
-    step,
-  });
+export async function saveProductLimits(sku: string, limits: PriceLimitsDraft): Promise<void> {
+  await send(`/api/strategy/products/${encodeURIComponent(sku)}/limits`, "PUT", limits);
+}
+
+/** The catalogue-wide tools behind «Массовые настройки». */
+export async function runBulkTools(tools: BulkTools): Promise<BulkToolsResult> {
+  const response = await send("/api/tools/bulk", "POST", tools);
+  return (await response.json()) as BulkToolsResult;
+}
+
+/** The margin calculator: what is left of one sale at this price. */
+export async function previewMargin(input: {
+  price: string;
+  sku?: string;
+  purchase_price?: string | null;
+  tax_percent?: string;
+  commission_percent?: string;
+  delivery_cost?: string;
+}): Promise<Margin> {
+  const response = await send("/api/tools/margin", "POST", input);
+  return (await response.json()) as Margin;
 }
 
 

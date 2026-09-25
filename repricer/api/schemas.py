@@ -8,11 +8,19 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Annotated, Self
+from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, PlainSerializer, model_validator
 
-from repricer.pricing import MAX_TARGET_POSITION, DecisionReason, PricingStrategy
+from repricer.pricing import (
+    DEFAULT_TAX_PERCENT,
+    MAX_DISCOUNT_PERCENT,
+    MAX_MARKUP_PERCENT,
+    MAX_TARGET_POSITION,
+    DecisionReason,
+    MarginBreakdown,
+    PricingStrategy,
+)
 
 CityId = Annotated[
     str,
@@ -32,6 +40,26 @@ MoneyOut = Annotated[
     PlainSerializer(lambda value: format(value.normalize(), "f"), return_type=str, when_used="json"),
 ]
 TargetPosition = Annotated[int, Field(ge=1, le=MAX_TARGET_POSITION)]
+#: Percent below the product's own price, e.g. 10 for "no lower than 90% of it".
+DiscountPercent = Annotated[
+    Decimal, Field(ge=0, le=MAX_DISCOUNT_PERCENT, max_digits=5, decimal_places=2, examples=["10"])
+]
+#: Percent above the product's own price.
+MarkupPercent = Annotated[
+    Decimal, Field(ge=0, le=MAX_MARKUP_PERCENT, max_digits=5, decimal_places=2, examples=["5"])
+]
+#: A share of the sale price: tax or Kaspi's commission.
+RatePercent = Annotated[Decimal, Field(ge=0, le=100, max_digits=5, decimal_places=2)]
+Category = Annotated[str, Field(min_length=1, max_length=128, examples=["Системные блоки"])]
+#: What the catalogue can be ordered by. Margin first is how a merchant finds
+#: the products that are losing money.
+ProductSort = Literal[
+    "sku", "title", "price_asc", "price_desc", "margin_asc", "margin_desc", "updated"
+]
+#: "На продаже" means switched on *and* in stock somewhere; see Product.on_sale.
+SaleFilter = Literal["all", "on", "off"]
+#: Category value standing for "products without a category".
+NO_CATEGORY = "__none__"
 
 
 class RuleFields(BaseModel):
@@ -116,15 +144,81 @@ class GlobalStrategyOut(BaseModel):
 
 
 class ProductPriceLimitsIn(BaseModel):
-    min_price: Money
-    max_price: Money
+    """One product's price band, in tenge or as a share of its own price.
+
+    Each side is set one way or the other: ``min_price`` **or** ``min_percent``.
+    A percentage is stored as well as resolved, so that raising the product's own
+    price later moves the limit with it instead of leaving a stale floor behind.
+    """
+
+    min_price: Money | None = None
+    max_price: Money | None = None
+    min_percent: DiscountPercent | None = None
+    max_percent: MarkupPercent | None = None
     step: int | None = Field(default=None, ge=1)
 
     @model_validator(mode="after")
     def check(self) -> Self:
-        if self.max_price <= self.min_price:
+        if self.min_price is not None and self.min_percent is not None:
+            raise ValueError("минимум задаётся либо в тенге, либо в процентах")
+        if self.max_price is not None and self.max_percent is not None:
+            raise ValueError("максимум задаётся либо в тенге, либо в процентах")
+        if not any(
+            value is not None
+            for value in (self.min_price, self.max_price, self.min_percent, self.max_percent)
+        ):
+            raise ValueError("укажите минимальную или максимальную цену")
+        if (
+            self.min_price is not None
+            and self.max_price is not None
+            and self.max_price <= self.min_price
+        ):
             raise ValueError("максимальная цена должна быть выше минимальной")
         return self
+
+
+class MarginOut(BaseModel):
+    """Where the money from one sale goes."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    price: MoneyOut
+    commission: MoneyOut
+    tax: MoneyOut
+    delivery: MoneyOut
+    purchase_price: MoneyOut
+    profit: MoneyOut
+    margin_percent: Decimal
+    markup_percent: Decimal | None
+    break_even_price: MoneyOut | None
+    #: True when no purchase price is known, so the profit shown is optimistic.
+    estimated: bool
+
+    @classmethod
+    def of(cls, breakdown: MarginBreakdown) -> MarginOut:
+        return cls.model_validate(breakdown)
+
+
+class ProductMarginsOut(BaseModel):
+    """The same calculation at the three prices the catalogue shows."""
+
+    current: MarginOut | None = None
+    minimum: MarginOut | None = None
+    maximum: MarginOut | None = None
+
+
+class MarginPreviewIn(BaseModel):
+    """Calculator input. Anything omitted falls back to the shop's settings."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    price: Money
+    purchase_price: Annotated[Decimal, Field(ge=0, max_digits=12, decimal_places=2)] | None = None
+    tax_percent: RatePercent | None = None
+    commission_percent: RatePercent | None = None
+    delivery_cost: Annotated[Decimal, Field(ge=0, max_digits=12, decimal_places=2)] | None = None
+    #: Takes the product's purchase price, commission and delivery as defaults.
+    sku: Sku | None = None
 
 
 class RuleStatusOut(BaseModel):
@@ -151,6 +245,10 @@ class RuleOut(BaseModel):
     strategy: PricingStrategy
     min_price: MoneyOut
     max_price: MoneyOut
+    #: Set when the limit was entered as a share of the product's own price; the
+    #: tenge figures above are then derived and follow the base price.
+    min_percent: Decimal | None = None
+    max_percent: Decimal | None = None
     step: int
     target_position: int | None
     ignored_merchants: list[str]
@@ -175,11 +273,73 @@ class ProductRulesOut(BaseModel):
     brand: str | None
     base_price: MoneyOut | None
     purchase_price: MoneyOut | None = None
+    category: str | None = None
+    commission_percent: Decimal | None = None
+    delivery_cost: MoneyOut | None = None
     auto_decrease: bool = True
     auto_increase: bool = False
     is_active: bool
+    #: Switched on and in stock somewhere: what "на продаже" means in the filter.
+    on_sale: bool = True
     rules: list[RuleOut]
     availabilities: list[AvailabilityIn] = Field(default_factory=list)
+    #: Profit at the current, minimum and maximum price of the shown city.
+    margins: ProductMarginsOut = Field(default_factory=ProductMarginsOut)
+
+
+class CategoryOut(BaseModel):
+    """One entry of the category menu above the catalogue."""
+
+    #: Null for products that have no category yet.
+    name: str | None
+    products: int
+
+
+class BulkToolsIn(BaseModel):
+    """The catalogue-wide tools, as one atomic request.
+
+    Every field is optional and independent, so the interface can offer them as
+    separate switches and send whichever the merchant turned on.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: Which products to touch; empty means every product of the shop.
+    skus: list[Sku] = Field(default_factory=list, max_length=5_000)
+    #: Set a floor this far below each product's own price and allow lowering.
+    set_min_percent: DiscountPercent | None = None
+    #: Set a ceiling this far above each product's own price and allow raising.
+    set_max_percent: MarkupPercent | None = None
+    #: Push today's price up to the ceiling, for when the competition has left.
+    raise_to_max: bool = False
+    #: Stop lowering prices of products that are not on sale right now.
+    disable_decrease_when_off_sale: bool = False
+
+    @model_validator(mode="after")
+    def check_something_to_do(self) -> Self:
+        if not any(
+            (
+                self.set_min_percent is not None,
+                self.set_max_percent is not None,
+                self.raise_to_max,
+                self.disable_decrease_when_off_sale,
+            )
+        ):
+            raise ValueError("выберите хотя бы одно действие")
+        if len(set(self.skus)) != len(self.skus):
+            raise ValueError("в списке есть повторяющиеся артикулы")
+        return self
+
+
+class BulkToolsOut(BaseModel):
+    """What the tools actually changed, so the interface can report it."""
+
+    products_seen: int
+    limits_set: int = Field(description="Products whose floor or ceiling changed.")
+    prices_raised: int = Field(description="Products whose current price moved up to the maximum.")
+    decrease_disabled: int
+    #: Products left untouched, with the reason: no card, no own price, and so on.
+    skipped: dict[str, int] = Field(default_factory=dict)
 
 
 class RuleListOut(BaseModel):
@@ -276,13 +436,20 @@ class AvailabilityIn(BaseModel):
 class ProductManagementIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     purchase_price: Annotated[Decimal, Field(ge=0, max_digits=12, decimal_places=2)] | None = None
+    #: Empty string clears the category, as does null.
+    category: Annotated[str, Field(max_length=128)] | None = None
+    commission_percent: RatePercent | None = None
+    delivery_cost: Annotated[Decimal, Field(ge=0, max_digits=12, decimal_places=2)] | None = None
     auto_decrease: bool | None = None
     auto_increase: bool | None = None
+    #: The product's own switch: off keeps it out of the price list entirely.
+    is_active: bool | None = None
     availabilities: list[AvailabilityIn] | None = None
 
     @model_validator(mode="after")
     def check_management(self) -> Self:
-        for name in self.model_fields_set - {"purchase_price"}:
+        nullable = {"purchase_price", "category", "commission_percent", "delivery_cost"}
+        for name in self.model_fields_set - nullable:
             if getattr(self, name) is None:
                 raise ValueError(f"{name} cannot be null")
         if self.availabilities is not None:
@@ -352,6 +519,9 @@ class ProductOut(BaseModel):
     brand: str | None
     base_price: MoneyOut | None
     purchase_price: MoneyOut | None = None
+    category: str | None = None
+    commission_percent: Decimal | None = None
+    delivery_cost: MoneyOut | None = None
     auto_decrease: bool = True
     auto_increase: bool = False
     is_active: bool
@@ -399,6 +569,10 @@ class SettingsOut(BaseModel):
     telegram_configured: bool
     telegram_chat_ids: list[str]
     is_ready: bool
+    # Defaults of the margin calculator.
+    tax_percent: Decimal
+    commission_percent: Decimal
+    delivery_cost: MoneyOut
 
 
 class SettingsIn(BaseModel):
@@ -413,6 +587,13 @@ class SettingsIn(BaseModel):
     interval_seconds: int = Field(default=300, ge=60, le=86_400)
     request_interval: float = Field(default=2, ge=0, le=60)
     telegram_chat_ids: list[str] = Field(default_factory=list)
+    tax_percent: RatePercent = Field(
+        default=DEFAULT_TAX_PERCENT, description="Налог с оборота; в Казахстане розничный 3%."
+    )
+    commission_percent: RatePercent = Field(
+        default=Decimal(0), description="Комиссия Kaspi по договору, обычно 8–15%."
+    )
+    delivery_cost: Annotated[Decimal, Field(ge=0, max_digits=12, decimal_places=2)] = Decimal(0)
 
     @model_validator(mode="after")
     def tidy(self) -> Self:

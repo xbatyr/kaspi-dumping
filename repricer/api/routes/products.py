@@ -112,7 +112,10 @@ def manage_product(sku: str, payload: ProductManagementIn,
                    session: SessionDep, merchant: MerchantDep) -> ProductOut:
     product = _by_sku(session, merchant, sku)
     for name in payload.model_fields_set - {"availabilities"}:
-        setattr(product, name, getattr(payload, name))
+        value = getattr(payload, name)
+        if name == "category" and isinstance(value, str):
+            value = value.strip() or None
+        setattr(product, name, value)
     if payload.availabilities is not None:
         # Update existing points only: a typo must not silently remove a warehouse.
         by_store = {entry.store_id: entry for entry in product.availabilities}
@@ -234,6 +237,8 @@ def _apply_xml_offer(product: Product, offer: ImportedOffer) -> None:
         product.kaspi_product_id = offer.kaspi_product_id
     if offer.base_price is not None:
         product.base_price = offer.base_price
+        # Limits entered as a percentage are re-derived from the new own price.
+        product.refresh_percent_limits()
 
     existing_stores = {entry.store_id: entry for entry in product.availabilities}
     wanted_stores = {entry.store_id: entry for entry in offer.availabilities}
@@ -296,6 +301,9 @@ def _apply(product: Product, payload: ProductIn) -> None:
             product.availabilities.remove(existing)
 
     _apply_rules(product, payload.rules)
+    # A percent-based floor means "this far below my price", so it moves when
+    # the merchant's own price does.
+    product.refresh_percent_limits()
 
 
 def _apply_rules(product: Product, rules: list[RuleInline]) -> None:
@@ -317,6 +325,10 @@ def _apply_rules(product: Product, rules: list[RuleInline]) -> None:
         rule.step = wanted.step
         rule.target_position = wanted.target_position
         rule.is_active = wanted.is_active
+        # Limits sent in tenge are exactly those limits, so any percentage the
+        # rule carried is no longer what the merchant means.
+        rule.min_percent = None
+        rule.max_percent = None
 
 
 def _product_out(product: Product) -> ProductOut:
@@ -327,6 +339,9 @@ def _product_out(product: Product) -> ProductOut:
         brand=product.brand,
         base_price=product.base_price,
         purchase_price=product.purchase_price,
+        category=product.category,
+        commission_percent=product.commission_percent,
+        delivery_cost=product.delivery_cost,
         auto_decrease=product.auto_decrease,
         auto_increase=product.auto_increase,
         is_active=product.is_active,

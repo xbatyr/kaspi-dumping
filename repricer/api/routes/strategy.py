@@ -14,7 +14,12 @@ from repricer.api.security import ApiKeyGuard
 from repricer.db.models import Product, RepricerRule, ShopSettings
 from repricer.db.settings_store import load_settings
 from repricer.cities import DEFAULT_CITY_ID
-from repricer.pricing import PricingStrategy
+from repricer.pricing import (
+    PercentLimits,
+    PriceLimits,
+    PricingStrategy,
+    limits_from_percent,
+)
 
 router = APIRouter(prefix="/api/strategy", tags=["strategy"], dependencies=[ApiKeyGuard])
 
@@ -44,7 +49,12 @@ def _products(session: SessionDep, merchant: MerchantDep) -> list[Product]:
 
 
 def _apply(
-    product: Product, settings: ShopSettings, minimum: Decimal, maximum: Decimal, step: int
+    product: Product,
+    settings: ShopSettings,
+    minimum: Decimal,
+    maximum: Decimal,
+    step: int,
+    percent: PercentLimits | None = None,
 ) -> None:
     assert settings.global_strategy is not None
     by_city = {rule.city_id: rule for rule in product.rules}
@@ -60,10 +70,60 @@ def _apply(
         rule.ignored_merchants = list(settings.global_ignored_merchants)
         rule.min_price = minimum
         rule.max_price = maximum
+        _remember_percent(rule, percent)
         rule.is_active = True
     for rule in product.rules:
         if rule.city_id not in settings.global_city_ids:
             rule.is_active = False
+
+
+def _remember_percent(rule: RepricerRule, percent: PercentLimits | None) -> None:
+    """Store how a limit was expressed, so it can follow the base price later.
+
+    A side given in tenge clears its percentage: the merchant has just said, in
+    tenge, what that limit is, and it must not move on its own afterwards.
+    """
+    if percent is None:
+        rule.min_percent = None
+        rule.max_percent = None
+        return
+    rule.min_percent = percent.min_percent
+    rule.max_percent = percent.max_percent
+
+
+def set_product_limits(
+    product: Product,
+    settings: ShopSettings,
+    limits: PriceLimits,
+    step: int,
+    percent: PercentLimits | None = None,
+) -> None:
+    """Give one product its price band, wherever the merchant set it from.
+
+    With a shop strategy configured the band goes to every city that strategy
+    covers; without one the product keeps a single manual rule, so that limits
+    can be prepared before the bot is ever switched on.
+    """
+    if settings.global_strategy is None or not settings.global_city_ids:
+        if not product.rules:
+            rule = RepricerRule(
+                city_id=DEFAULT_CITY_ID,
+                strategy=PricingStrategy.MANUAL,
+                min_price=limits.min_price,
+                max_price=limits.max_price,
+                step=step,
+                current_price=product.base_price,
+            )
+            _remember_percent(rule, percent)
+            product.rules.append(rule)
+        else:
+            for rule in product.rules:
+                rule.min_price = limits.min_price
+                rule.max_price = limits.max_price
+                rule.step = step
+                _remember_percent(rule, percent)
+    else:
+        _apply(product, settings, limits.min_price, limits.max_price, step, percent)
 
 
 @router.get("", summary="Shared strategy for all configured products")
@@ -108,20 +168,77 @@ def put_product_limits(
         (rule.step for rule in product.rules if rule.strategy is not PricingStrategy.MANUAL),
         product.rules[0].step if product.rules else settings.global_step,
     )
-    step = payload.step or current_step
-    if settings.global_strategy is None or not settings.global_city_ids:
-        if not product.rules:
-            product.rules.append(RepricerRule(
-                city_id=DEFAULT_CITY_ID, strategy=PricingStrategy.MANUAL,
-                min_price=payload.min_price, max_price=payload.max_price,
-                step=step, current_price=product.base_price,
-            ))
-        else:
-            for rule in product.rules:
-                rule.min_price = payload.min_price
-                rule.max_price = payload.max_price
-                rule.step = step
-    else:
-        _apply(product, settings, payload.min_price, payload.max_price, step)
+    limits, percent = resolve_limits(payload, product)
+    set_product_limits(product, settings, limits, payload.step or current_step, percent)
     session.commit()
     return [RuleOut.model_validate(rule) for rule in product.rules]
+
+
+def anchor_price(product: Product) -> Decimal | None:
+    """The price percentages are taken from: the merchant's own, not the bot's.
+
+    Falling back to a repriced price only happens for products imported without
+    a price of their own, and even then the percentage is stored, so the limits
+    settle onto the base price as soon as there is one.
+    """
+    if product.base_price is not None and product.base_price > 0:
+        return product.base_price
+    return next((rule.current_price for rule in product.rules if rule.current_price), None)
+
+
+def resolve_limits(
+    payload: ProductPriceLimitsIn, product: Product
+) -> tuple[PriceLimits, PercentLimits | None]:
+    """Work out the two prices, from tenge, from percentages, or from both.
+
+    A side the request leaves out keeps what it had, percentage included.
+    """
+    existing = next(
+        (rule for rule in product.rules if rule.max_price > rule.min_price),
+        product.rules[0] if product.rules else None,
+    )
+    current = (
+        PriceLimits(existing.min_price, existing.max_price)
+        if existing
+        else PriceLimits(Decimal(1), Decimal(1))
+    )
+    minimum, maximum = current.min_price, current.max_price
+    min_percent = existing.min_percent if existing else None
+    max_percent = existing.max_percent if existing else None
+
+    if payload.min_price is not None:
+        minimum, min_percent = payload.min_price, None
+    elif payload.min_percent is not None:
+        min_percent = payload.min_percent
+        minimum = limits_from_percent(
+            _require_anchor(product), PercentLimits(min_percent=min_percent), current
+        ).min_price
+    if payload.max_price is not None:
+        maximum, max_percent = payload.max_price, None
+    elif payload.max_percent is not None:
+        max_percent = payload.max_percent
+        maximum = limits_from_percent(
+            _require_anchor(product), PercentLimits(max_percent=max_percent), current
+        ).max_price
+
+    if maximum <= minimum:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"максимальная цена ({maximum} ₸) должна быть выше минимальной ({minimum} ₸)",
+        )
+    percent = (
+        PercentLimits(min_percent=min_percent, max_percent=max_percent)
+        if min_percent is not None or max_percent is not None
+        else None
+    )
+    return PriceLimits(minimum, maximum), percent
+
+
+def _require_anchor(product: Product) -> Decimal:
+    anchor = anchor_price(product)
+    if anchor is None:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"{product.sku}: проценты считаются от вашей цены, а её нет — задайте цену или лимит в тенге",
+        )
+    return anchor
