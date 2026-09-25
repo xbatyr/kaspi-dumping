@@ -90,4 +90,4 @@ VM; базу стоит регулярно экспортировать за п�
 
 Изображения из Kaspi подгружаются фоновым воркером небольшими пачками; для
 первичного заполнения каталога можно выполнить
-`sudo docker compose exec -T api python -m repricer.images backfill --limit 500`.
+`sudo docker compose exec -T api python -m repricer.images --limit 500`.

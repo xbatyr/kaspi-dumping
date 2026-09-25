@@ -12,7 +12,7 @@ chmod 600 "$backup"
 sudo docker compose build api
 sudo docker compose build web
 sudo docker compose run --rm migrate
-sudo docker compose up -d --no-build --force-recreate api worker bot web
+sudo docker compose up -d --no-build api worker bot web
 
 for attempt in $(seq 1 30); do
   status=$(curl -sS -o /dev/null -w '%{http_code}' https://kaspi-repricer.duckdns.org/ || true)
