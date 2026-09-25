@@ -119,16 +119,16 @@ export function ProductsTable({ data, cities, search, status, feedUrl }: Props) 
             name="q"
             defaultValue={search}
             placeholder="Поиск по названию или SKU"
-            className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3 text-sm outline-none focus:border-slate-400"
+            className="min-h-11 w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3 text-base outline-none focus:border-slate-400 sm:text-sm"
           />
         </form>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
         {selectedRuleIds.length > 0 && (
           <button
             type="button"
             onClick={() => router.push(`/strategies?bulk=${selectedRuleIds.join(",")}`)}
-            className="cursor-pointer rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50"
+            className="min-h-11 cursor-pointer rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50"
           >
             Настроить выбранные ({selectedRuleIds.length})
           </button>
@@ -136,17 +136,17 @@ export function ProductsTable({ data, cities, search, status, feedUrl }: Props) 
         <button
           type="button"
           onClick={() => setAdding(true)}
-          className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800"
+          className="inline-flex min-h-11 cursor-pointer items-center justify-center gap-1.5 rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800"
         >
           <PackagePlus className="size-4" />
           Добавить товары
         </button>
-        <label className="flex items-center gap-2 text-sm text-slate-600">
+        <label className="flex min-w-0 items-center gap-2 text-sm text-slate-600">
           Город
           <select
             value={city}
             onChange={(event) => { setCity(event.target.value); setSelected(new Set()); }}
-            className="cursor-pointer rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-slate-400"
+            className="min-h-11 min-w-0 flex-1 cursor-pointer rounded-lg border border-slate-200 bg-white px-3 py-2 text-base outline-none focus:border-slate-400 sm:flex-none sm:text-sm"
           >
             {cities.map((item) => (
               <option key={item.id} value={item.id}>
@@ -293,15 +293,15 @@ export function ProductsTable({ data, cities, search, status, feedUrl }: Props) 
               return (
                 <div
                   key={product.sku}
-                  className="rounded-xl border border-slate-200 bg-white p-4"
+                  className="min-w-0 rounded-xl border border-slate-200 bg-white p-4"
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <input type="checkbox" aria-label={`Выбрать ${product.sku}`} checked={rule ? selected.has(rule.id) : false} onChange={() => { if (rule) toggleSelected(rule.id); }} disabled={!rule} className="cursor-pointer" />
-                        <p className="truncate font-medium text-slate-900">{product.title}</p>
+                      <div className="flex items-center gap-1">
+                        <label className="flex size-11 shrink-0 items-center justify-center"><input type="checkbox" aria-label={`Выбрать ${product.sku}`} checked={rule ? selected.has(rule.id) : false} onChange={() => { if (rule) toggleSelected(rule.id); }} disabled={!rule} className="size-5 cursor-pointer" /></label>
+                        <p className="min-w-0 truncate font-medium text-slate-900">{product.title}</p>
                       </div>
-                      <p className="mt-0.5 font-mono text-xs text-slate-500">{product.sku}</p>
+                      <p className="ml-12 break-all font-mono text-xs text-slate-500">{product.sku}</p>
                     </div>
                     {rule?.strategy === "manual" ? <span className="text-xs text-slate-500">Вручную</span> : <ActiveToggle
                       ruleIds={rule ? [rule.id] : []}
@@ -311,26 +311,26 @@ export function ProductsTable({ data, cities, search, status, feedUrl }: Props) 
                     />}
                   </div>
 
-                  <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
-                    <div>
+                  <dl className="mt-3 grid min-w-0 grid-cols-2 gap-x-3 gap-y-3 text-sm">
+                    <div className="min-w-0">
                       <dt className="text-xs text-slate-500">Цена в прайсе</dt>
                       <dd className="tabular font-medium text-slate-900">
                         <PriceQuickEdit key={`${product.sku}:${rule?.min_price}:${rule?.max_price}:${rule?.step}`} product={product} rule={rule} />
                       </dd>
                     </div>
-                    <div>
+                    <div className="min-w-0">
                       <dt className="text-xs text-slate-500">Расчётная</dt>
                       <dd className="tabular text-slate-700">
                         {tenge(rule?.last_change?.computed_price)}
                       </dd>
                     </div>
-                    <div>
+                    <div className="col-span-2 min-w-0">
                       <dt className="text-xs text-slate-500">Min / Max / Шаг</dt>
                       <dd className="tabular text-slate-700">
                         {rule ? `${tenge(rule.min_price)} — ${tenge(rule.max_price)} · шаг ${tenge(String(rule.step))}` : "—"}
                       </dd>
                     </div>
-                    <div>
+                    <div className="col-span-2 min-w-0">
                       <dt className="text-xs text-slate-500">Позиция</dt>
                       <dd>
                         <PositionBadge position={rule?.last_change?.expected_position ?? null} />
@@ -342,7 +342,7 @@ export function ProductsTable({ data, cities, search, status, feedUrl }: Props) 
                     <button
                       type="button"
                       onClick={() => product.kaspi_product_id ? router.push(`/strategies?sku=${encodeURIComponent(product.sku)}`) : void linkCard(product)}
-                      className="inline-flex flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700"
+                      className="inline-flex min-h-11 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700"
                     >
                       <SlidersHorizontal className="size-4" />
                       {!product.kaspi_product_id ? "Привязать" : "Настроить"}
@@ -351,7 +351,7 @@ export function ProductsTable({ data, cities, search, status, feedUrl }: Props) 
                       type="button"
                       onClick={() => setHistoryOf(product.sku)}
                       aria-label="История цен"
-                      className="inline-flex cursor-pointer items-center justify-center rounded-lg border border-slate-200 px-3 py-2 text-slate-600"
+                      className="inline-flex min-h-11 min-w-11 cursor-pointer items-center justify-center rounded-lg border border-slate-200 px-3 py-2 text-slate-600"
                     >
                       <History className="size-4" />
                     </button>
@@ -373,7 +373,7 @@ export function ProductsTable({ data, cities, search, status, feedUrl }: Props) 
               type="button"
               disabled={data.offset === 0}
               onClick={() => goToPage(data.offset - data.limit)}
-              className="cursor-pointer rounded-lg border border-slate-200 bg-white px-3 py-1.5 disabled:cursor-not-allowed disabled:opacity-50"
+              className="min-h-11 cursor-pointer rounded-lg border border-slate-200 bg-white px-3 py-1.5 disabled:cursor-not-allowed disabled:opacity-50"
             >
               Назад
             </button>
@@ -381,7 +381,7 @@ export function ProductsTable({ data, cities, search, status, feedUrl }: Props) 
               type="button"
               disabled={data.offset + data.limit >= data.total}
               onClick={() => goToPage(data.offset + data.limit)}
-              className="cursor-pointer rounded-lg border border-slate-200 bg-white px-3 py-1.5 disabled:cursor-not-allowed disabled:opacity-50"
+              className="min-h-11 cursor-pointer rounded-lg border border-slate-200 bg-white px-3 py-1.5 disabled:cursor-not-allowed disabled:opacity-50"
             >
               Вперёд
             </button>

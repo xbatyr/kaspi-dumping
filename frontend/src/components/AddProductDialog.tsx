@@ -142,7 +142,7 @@ export function AddProductDialog({ cities, onClose }: { cities: City[]; onClose:
         role="dialog"
         aria-modal="true"
         aria-labelledby="add-product-title"
-        className="flex max-h-[92vh] w-full max-w-2xl flex-col rounded-t-2xl bg-white shadow-xl sm:rounded-2xl"
+        className="flex max-h-[92dvh] w-full max-w-2xl flex-col rounded-t-2xl bg-white shadow-xl sm:rounded-2xl"
       >
         <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
           <h2 id="add-product-title" className="text-base font-semibold text-slate-900">
@@ -152,13 +152,13 @@ export function AddProductDialog({ cities, onClose }: { cities: City[]; onClose:
             type="button"
             onClick={onClose}
             aria-label="Закрыть"
-            className="cursor-pointer rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+            className="inline-flex size-11 cursor-pointer items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700"
           >
             <X className="size-5" />
           </button>
         </div>
 
-        <div className="flex gap-2 border-b border-slate-200 px-5 py-3">
+        <div className="flex gap-1 overflow-x-auto border-b border-slate-200 px-3 py-2 sm:gap-2 sm:px-5 sm:py-3">
           {(
             [
               ["one", "Один товар", PackagePlus],
@@ -170,7 +170,7 @@ export function AddProductDialog({ cities, onClose }: { cities: City[]; onClose:
               key={value}
               type="button"
               onClick={() => setMode(value)}
-              className={`inline-flex cursor-pointer items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium ${
+              className={`inline-flex min-h-11 shrink-0 cursor-pointer items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium ${
                 mode === value
                   ? "bg-slate-900 text-white"
                   : "text-slate-600 hover:bg-slate-100"
@@ -189,7 +189,7 @@ export function AddProductDialog({ cities, onClose }: { cities: City[]; onClose:
                 <span className="mb-1 block text-xs font-medium text-slate-600">
                   Найти товар на Kaspi
                 </span>
-                <div className="flex gap-2">
+                <div className="flex min-w-0 gap-2">
                   <input
                     value={query}
                     onChange={(event) => setQuery(event.target.value)}
@@ -200,13 +200,13 @@ export function AddProductDialog({ cities, onClose }: { cities: City[]; onClose:
                       }
                     }}
                     placeholder="Например: iPhone 13 128Gb"
-                    className="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-900"
+                    className="min-h-11 min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-base outline-none focus:border-slate-900 sm:text-sm"
                   />
                   <button
                     type="button"
                     onClick={() => void search()}
                     disabled={searching || query.trim().length < 2}
-                    className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
+                    className="inline-flex min-h-11 shrink-0 cursor-pointer items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
                   >
                     {searching ? <Loader2 className="size-4 animate-spin" /> : <Search className="size-4" />}
                     Найти
@@ -350,11 +350,11 @@ export function AddProductDialog({ cities, onClose }: { cities: City[]; onClose:
           )}
         </div>
 
-        <div className="flex items-center justify-end gap-2 border-t border-slate-200 px-5 py-4">
+        <div className="flex items-center justify-end gap-2 border-t border-slate-200 px-5 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:py-4">
           <button
             type="button"
             onClick={onClose}
-            className="cursor-pointer rounded-lg px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100"
+            className="min-h-11 cursor-pointer rounded-lg px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100"
           >
             Закрыть
           </button>
@@ -362,7 +362,7 @@ export function AddProductDialog({ cities, onClose }: { cities: City[]; onClose:
             type="button"
             onClick={save}
             disabled={saving}
-            className="inline-flex cursor-pointer items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-60"
+            className="inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-60"
           >
             {saving && <Loader2 className="size-4 animate-spin" />}
             {mode === "xml" ? (xmlPreview ? "Импортировать" : "Проверить XML") : "Сохранить"}
@@ -393,7 +393,7 @@ function Field({
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
-        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-900"
+        className="min-h-11 w-full rounded-lg border border-slate-300 px-3 py-2 text-base outline-none focus:border-slate-900 sm:text-sm"
       />
       {hint && <span className="mt-1 block text-xs text-slate-400">{hint}</span>}
     </label>

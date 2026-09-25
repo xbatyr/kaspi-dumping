@@ -31,9 +31,9 @@ export function StatusPanel({ status, feedUrl }: { status: Status; feedUrl: stri
   }
 
   return (
-    <section className="mb-5 grid gap-3 lg:grid-cols-3">
-      <div className="rounded-xl border border-slate-200 bg-white p-4 lg:col-span-2">
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+    <section className="mb-5 grid min-w-0 grid-cols-1 gap-3 lg:grid-cols-3">
+      <div className="min-w-0 rounded-xl border border-slate-200 bg-white p-4 lg:col-span-2">
+        <div className="grid min-w-0 grid-cols-2 gap-4 sm:grid-cols-4">
           <Metric
             label="Товаров в прайсе"
             value={`${status.products_ready} из ${status.products_total}`}
@@ -87,7 +87,7 @@ export function StatusPanel({ status, feedUrl }: { status: Status; feedUrl: stri
         )}
       </div>
 
-      <div className="rounded-xl border border-slate-200 bg-white p-4">
+      <div className="min-w-0 rounded-xl border border-slate-200 bg-white p-4">
         <p className="flex items-center gap-1.5 text-sm font-medium text-slate-900">
           <Link2 className="size-4 text-slate-400" />
           Ссылка для кабинета Kaspi
@@ -98,13 +98,13 @@ export function StatusPanel({ status, feedUrl }: { status: Status; feedUrl: stri
         </p>
         {localFeed && <p className="mt-2 text-xs text-amber-700">Это локальный адрес для проверки. Для Kaspi нужен доступный из интернета HTTPS-адрес.</p>}
         <div className="mt-2 flex items-center gap-2">
-          <code className="flex-1 truncate rounded-lg bg-slate-50 px-2 py-1.5 text-xs text-slate-700">
+          <code className="min-w-0 flex-1 truncate rounded-lg bg-slate-50 px-2 py-2 text-xs text-slate-700">
             {feedUrl}
           </code>
           <button
             type="button"
             onClick={copyFeed}
-            className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-slate-200 px-2 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+            className="inline-flex min-h-11 shrink-0 cursor-pointer items-center gap-1 rounded-lg border border-slate-200 px-2 text-xs font-medium text-slate-700 hover:bg-slate-50"
           >
             {copied ? <CheckCircle2 className="size-3.5 text-emerald-600" /> : <Copy className="size-3.5" />}
             {copied ? "Скопировано" : "Копировать"}

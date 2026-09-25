@@ -162,7 +162,7 @@ export function SettingsForm({ settings }: { settings: Settings }) {
         type="button"
         onClick={save}
         disabled={saving}
-        className="inline-flex cursor-pointer items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-60"
+        className="inline-flex min-h-11 w-full cursor-pointer items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-60 sm:w-auto"
       >
         {saving && <Loader2 className="size-4 animate-spin" />}
         Сохранить настройки
@@ -216,7 +216,7 @@ function Field({
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
-        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-900"
+        className="min-h-11 w-full rounded-lg border border-slate-300 px-3 py-2 text-base outline-none focus:border-slate-900 sm:text-sm"
       />
       {hint && <span className="mt-1 block text-xs text-slate-400">{hint}</span>}
     </label>

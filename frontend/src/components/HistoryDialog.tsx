@@ -66,7 +66,7 @@ export function HistoryDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby="history-title"
-        className="flex max-h-[92vh] w-full max-w-2xl flex-col rounded-t-2xl bg-white shadow-xl sm:rounded-2xl"
+        className="flex max-h-[92dvh] w-full max-w-2xl flex-col rounded-t-2xl bg-white pb-[env(safe-area-inset-bottom)] shadow-xl sm:rounded-2xl sm:pb-0"
       >
         <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
           <div>
@@ -79,7 +79,7 @@ export function HistoryDialog({
             type="button"
             onClick={onClose}
             aria-label="Закрыть"
-            className="cursor-pointer rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+            className="inline-flex size-11 cursor-pointer items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700"
           >
             <X className="size-5" />
           </button>
@@ -108,10 +108,10 @@ export function HistoryDialog({
                 return (
                   <li
                     key={entry.id}
-                    className="flex items-start justify-between gap-3 rounded-lg border border-slate-100 p-3"
+                    className="flex flex-col gap-2 rounded-lg border border-slate-100 p-3 sm:flex-row sm:items-start sm:justify-between sm:gap-3"
                   >
                     <div className="min-w-0">
-                      <p className="tabular flex items-center gap-1.5 text-sm">
+                      <p className="tabular flex flex-wrap items-center gap-1.5 text-sm">
                         {direction === "down" && <ArrowDown className="size-4 text-emerald-600" />}
                         {direction === "up" && <ArrowUp className="size-4 text-rose-600" />}
                         {direction === "same" && <Minus className="size-4 text-slate-300" />}

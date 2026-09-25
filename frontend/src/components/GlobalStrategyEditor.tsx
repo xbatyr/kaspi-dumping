@@ -63,7 +63,7 @@ export function GlobalStrategyEditor({ current, cities, defaultCity }: {
       {saved && <p role="status" className="rounded-lg bg-emerald-50 p-3 text-sm text-emerald-800">Общая стратегия сохранена.</p>}
     </div>
     <div className="flex justify-end border-t border-slate-200 px-5 py-4">
-      <button type="button" onClick={save} disabled={saving} className="inline-flex cursor-pointer items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">{saving && <Loader2 className="size-4 animate-spin" />}Сохранить общую стратегию</button>
+      <button type="button" onClick={save} disabled={saving} className="inline-flex min-h-11 w-full cursor-pointer items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50 sm:w-auto">{saving && <Loader2 className="size-4 animate-spin" />}Сохранить общую стратегию</button>
     </div>
   </section>;
 }

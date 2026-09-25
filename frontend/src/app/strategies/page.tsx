@@ -62,14 +62,14 @@ export default async function StrategiesPage({
     </div>
     <GlobalStrategyEditor current={global} cities={cities} defaultCity={defaultCity} />
     <div className="grid gap-5 lg:grid-cols-[minmax(240px,300px)_minmax(0,1fr)]">
-      <aside className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm lg:self-start">
+      <aside className="order-2 min-w-0 rounded-xl border border-slate-200 bg-white p-4 shadow-sm lg:order-1 lg:self-start">
         <form action="/strategies" className="relative">
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
           <input name="q" type="search" defaultValue={q} placeholder="Название или SKU" aria-label="Найти товар"
             className="w-full rounded-lg border border-slate-200 py-2 pl-9 pr-3 text-sm outline-none focus:border-slate-400" />
         </form>
         <p className="mt-3 text-xs text-slate-500">Товаров: {data.total}</p>
-        <div className="mt-2 max-h-[64vh] space-y-1 overflow-y-auto">
+        <div className="mt-2 max-h-60 space-y-1 overflow-y-auto lg:max-h-[64vh]">
           {data.items.map((product) => <Link key={product.sku} href={path(q, offset, product.sku)}
             className={`block rounded-lg px-3 py-2 text-sm ${selected?.sku === product.sku ? "bg-slate-900 text-white" : "text-slate-700 hover:bg-slate-100"}`}>
             <span className="block truncate font-medium">{product.title}</span>
@@ -83,11 +83,11 @@ export default async function StrategiesPage({
         </div>}
       </aside>
       {selected ? selected.kaspi_product_id
-        ? <ProductPriceEditor key={selected.sku} product={selected} />
-        : <div className="rounded-xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900">
+        ? <div className="order-1 min-w-0 lg:order-2"><ProductPriceEditor key={selected.sku} product={selected} /></div>
+        : <div className="order-1 min-w-0 rounded-xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900 lg:order-2">
             Для этого товара сначала привяжите карточку Kaspi во вкладке <Link href="/" className="underline">«Товары»</Link>.
           </div>
-        : <div className="rounded-xl border border-dashed border-slate-300 bg-white p-8 text-sm text-slate-500">Выберите товар.</div>}
+        : <div className="order-1 min-w-0 rounded-xl border border-dashed border-slate-300 bg-white p-8 text-sm text-slate-500 lg:order-2">Выберите товар.</div>}
     </div>
   </div>;
 }
