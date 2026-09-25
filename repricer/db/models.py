@@ -21,7 +21,7 @@ from sqlalchemy import (
 )
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy import false
-from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.ext.mutable import MutableList
 from sqlalchemy.orm import Mapped, WriteOnlyMapped, mapped_column, relationship
 
@@ -53,7 +53,8 @@ class Product(TimestampMixin, Base):
     """Our store's listing of one Kaspi product card."""
 
     __tablename__ = "products"
-    __table_args__ = (UniqueConstraint("merchant_id", "sku"),)
+    __table_args__ = (UniqueConstraint("merchant_id", "sku"),
+        CheckConstraint("purchase_price IS NULL OR purchase_price >= 0", name="purchase_price_not_negative"))
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
     #: Our Kaspi merchant ID (the store that owns this listing).
@@ -71,6 +72,9 @@ class Product(TimestampMixin, Base):
     #: The merchant's own price: the feed's <price> for cities without a rule,
     #: and what FIXED_PRICE rules hold.
     base_price: Mapped[Decimal | None]
+    purchase_price: Mapped[Decimal | None]
+    auto_decrease: Mapped[bool] = mapped_column(server_default=true(), default=True)
+    auto_increase: Mapped[bool] = mapped_column(server_default=false(), default=False)
     is_active: Mapped[bool] = mapped_column(server_default=true())
 
     rules: Mapped[list[RepricerRule]] = relationship(
@@ -242,6 +246,7 @@ class RepricerRule(TimestampMixin, Base):
     # never needs to scan price_history.
     current_price: Mapped[Decimal | None]
     last_evaluated_at: Mapped[datetime | None]
+    market_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
 
     product: Mapped[Product] = relationship(back_populates="rules")
 

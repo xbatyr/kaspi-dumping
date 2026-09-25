@@ -1,4 +1,5 @@
 import random
+from dataclasses import replace
 from decimal import Decimal
 
 import pytest
@@ -22,6 +23,20 @@ MANUAL = PricingStrategy.MANUAL
 COMPETITIVE = [BEAT, MATCH, FOLLOW, TARGET]
 
 engine = PricingEngine()
+
+
+@pytest.mark.parametrize("current,rival,down,up,expected", [
+    (3000, 2000, False, False, 3000),
+    (2000, 3000, True, False, 2000),
+    (2000, 3000, True, True, 2999),
+    (3000, 2000, True, False, 1999),
+    (6000, 3000, False, False, 2999),
+])
+def test_direction_controls(current, rival, down, up, expected):
+    settings = replace(config(), auto_decrease=down, auto_increase=up, raise_when_first=up)
+    decision = engine.evaluate(settings, [offer(OWN, current), offer("rival", rival)], Decimal(current))
+    assert decision.new_price == expected
+    assert decision.changed == (expected != current)
 
 
 def offer(merchant_id: str, price: int | str, rating: float | None = None) -> CompetitorOffer:

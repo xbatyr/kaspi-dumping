@@ -13,10 +13,10 @@ type Loaded =
 
 /** Keeps the fetching (and its try/catch) away from the JSX: a try block around
  *  rendering would not catch render errors anyway. */
-async function load(search: string, offset: number): Promise<Loaded> {
+async function load(search: string, offset: number, bot: string, sort: string): Promise<Loaded> {
   try {
     const [data, cities, status] = await Promise.all([
-      fetchRules({ search, limit: PAGE_SIZE, offset }),
+      fetchRules({ search, limit: PAGE_SIZE, offset, bot, sort }),
       fetchCities(),
       fetchStatus(),
     ]);
@@ -33,10 +33,10 @@ async function load(search: string, offset: number): Promise<Loaded> {
 export default async function DashboardPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; offset?: string }>;
+  searchParams: Promise<{ q?: string; offset?: string; bot?: string; sort?: string }>;
 }) {
-  const { q = "", offset = "0" } = await searchParams;
-  const result = await load(q, Number(offset) || 0);
+  const { q = "", offset = "0", bot = "all", sort = "sku" } = await searchParams;
+  const result = await load(q, Number(offset) || 0, bot, sort);
 
   if (!result.ok && result.needsSetup) {
     return (
@@ -78,6 +78,8 @@ export default async function DashboardPage({
       status={result.status}
       feedUrl={feedUrl()}
       search={q}
+      bot={bot}
+      sort={sort}
     />
   );
 }

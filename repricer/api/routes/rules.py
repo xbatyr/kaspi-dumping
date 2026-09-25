@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import func, or_, select
@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, selectinload
 from repricer.api.deps import MerchantDep, SessionDep
 from repricer.api.security import ApiKeyGuard
 from repricer.api.schemas import (
+    AvailabilityIn,
     BulkToggleIn,
     BulkToggleOut,
     BulkRuleUpdateIn,
@@ -38,7 +39,7 @@ def configure_product_rules(
     product = session.scalar(
         select(Product)
         .where(Product.merchant_id == merchant.merchant_id, Product.sku == sku)
-        .options(selectinload(Product.rules))
+        .options(selectinload(Product.rules), selectinload(Product.availabilities))
     )
     if product is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"no product with sku {sku}")
@@ -80,10 +81,19 @@ def list_rules(
     strategy: Annotated[PricingStrategy | None, Query()] = None,
     is_active: Annotated[bool | None, Query(description="Filter rules by their switch.")] = None,
     search: Annotated[str | None, Query(description="Substring of the SKU or title.")] = None,
+    bot: Literal["all", "enabled", "disabled", "unlinked"] = "all",
+    sort: Literal["sku", "title"] = "sku",
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> RuleListOut:
     filters = [Product.merchant_id == merchant.merchant_id]
+    enabled = Product.rules.any(RepricerRule.is_active & (RepricerRule.strategy != PricingStrategy.MANUAL))
+    if bot == "enabled":
+        filters.append(enabled)
+    elif bot == "disabled":
+        filters.append(~enabled)
+    elif bot == "unlinked":
+        filters.append(Product.kaspi_product_id == "")
     if search:
         pattern = f"%{search}%"
         filters.append(or_(Product.sku.ilike(pattern), Product.title.ilike(pattern)))
@@ -104,8 +114,8 @@ def list_rules(
     products = session.scalars(
         select(Product)
         .where(*filters)
-        .options(selectinload(Product.rules))
-        .order_by(Product.sku)
+        .options(selectinload(Product.rules), selectinload(Product.availabilities))
+        .order_by(Product.title if sort == "title" else Product.sku, Product.id)
         .limit(limit)
         .offset(offset)
     ).all()
@@ -118,7 +128,12 @@ def list_rules(
             kaspi_product_id=product.kaspi_product_id,
             brand=product.brand,
             base_price=product.base_price,
+        purchase_price=product.purchase_price,
+        auto_decrease=product.auto_decrease,
+        auto_increase=product.auto_increase,
             is_active=product.is_active,
+            availabilities=[AvailabilityIn(store_id=a.store_id, available=a.available,
+                stock_count=a.stock_count, preorder_days=a.preorder_days) for a in product.availabilities],
             rules=[
                 _rule_out(rule, changes.get((rule.product_id, rule.city_id)))
                 for rule in sorted(product.rules, key=lambda rule: rule.city_id)

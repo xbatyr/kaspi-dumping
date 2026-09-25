@@ -41,7 +41,7 @@ export function StatusPanel({ status, feedUrl }: { status: Status; feedUrl: stri
             icon={CheckCircle2}
           />
           <Metric
-            label="На первом месте"
+            label="Первое место (расчёт)"
             value={`${status.first_place}`}
             hint={`из ${status.rules_active} активных`}
             tone={status.first_place > 0 ? "good" : "plain"}

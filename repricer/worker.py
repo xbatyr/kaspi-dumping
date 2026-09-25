@@ -30,7 +30,7 @@ from html import escape
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
 
 from loguru import logger
@@ -100,6 +100,7 @@ class TaskOutcome:
     unreachable: bool = False
     #: Shop name of the cheapest competitor, for alerts; the engine only keeps IDs.
     leader_name: str | None = None
+    market_snapshot: dict[str, str | int | None] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -309,6 +310,10 @@ class RepricingWorker:
                         own_rating=self._settings.own_rating,
                         base_price=product.base_price,
                     )
+                config = replace(config,
+                    auto_decrease=product.auto_decrease,
+                    auto_increase=product.auto_increase,
+                    raise_when_first=product.auto_increase)
             except ValueError as exc:
                 # A rule the API could not have saved, or one whose product lost
                 # its base price. Skipping it beats failing the whole cycle.
@@ -383,10 +388,21 @@ class RepricingWorker:
             )
             leader = decision.leader
             names = {offer.merchant_id: offer.merchant_name for offer in offers}
+            ranked = sorted({offer.merchant_id: offer for offer in reversed(offers)}.values(),
+                            key=lambda offer: (offer.price, -(offer.rating or 0)))
+            own_index = next((index for index, offer in enumerate(ranked)
+                              if offer.merchant_id == own_merchant_id), None)
             return TaskOutcome(
                 snapshot,
                 decision=decision,
                 leader_name=names.get(leader.merchant_id) if leader else None,
+                market_snapshot={
+                    "position": own_index + 1 if own_index is not None else None,
+                    "offer_count": len(ranked),
+                    "observed_price": str(ranked[own_index].price) if own_index is not None else None,
+                    "leader_price": str(ranked[0].price),
+                    "expected_position": decision.expected_position,
+                },
             )
         except KaspiTransportError as exc:
             return TaskOutcome(snapshot, skipped=f"Kaspi unreachable ({exc})", unreachable=True)
@@ -412,6 +428,9 @@ class RepricingWorker:
                     "{} rules disappeared between loading and writing; their decisions are dropped",
                     len(decisions) - len(rules),
                 )
+            snapshots = {outcome.snapshot.rule_id: outcome.market_snapshot for outcome in decided}
+            for rule in rules:
+                rule.market_snapshot = snapshots.get(rule.id)
             updates = [PriceUpdate(rule, decisions[rule.id]) for rule in rules]
             applied_ids = {
                 update.rule.id for update in updates

@@ -9,6 +9,8 @@ import { STRATEGY_LABELS } from "@/lib/strategies";
 import type { City, HistoryPage } from "@/lib/types";
 
 const REASONS: Record<string, string> = {
+  already_first: "уже на первом месте",
+  direction_disabled: "изменение в этом направлении выключено",
   strategy_target: "по стратегии",
   capped_at_max: "упёрлись в максимум",
   fallback_position: "боролись за место ниже",

@@ -158,6 +158,7 @@ class RuleOut(BaseModel):
     #: Price the worker last applied in this city; null until the first run.
     current_price: MoneyOut | None
     last_evaluated_at: datetime | None
+    market_snapshot: dict[str, str | int | None] | None = None
     #: Null while the price has never moved, which is also true right after the
     #: rule is created.
     last_change: RuleStatusOut | None = None
@@ -173,8 +174,12 @@ class ProductRulesOut(BaseModel):
     kaspi_product_id: str
     brand: str | None
     base_price: MoneyOut | None
+    purchase_price: MoneyOut | None = None
+    auto_decrease: bool = True
+    auto_increase: bool = False
     is_active: bool
     rules: list[RuleOut]
+    availabilities: list[AvailabilityIn] = Field(default_factory=list)
 
 
 class RuleListOut(BaseModel):
@@ -268,6 +273,25 @@ class AvailabilityIn(BaseModel):
     preorder_days: int | None = Field(default=None, ge=0, le=30)
 
 
+class ProductManagementIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    purchase_price: Annotated[Decimal, Field(ge=0, max_digits=12, decimal_places=2)] | None = None
+    auto_decrease: bool | None = None
+    auto_increase: bool | None = None
+    availabilities: list[AvailabilityIn] | None = None
+
+    @model_validator(mode="after")
+    def check_management(self) -> Self:
+        for name in self.model_fields_set - {"purchase_price"}:
+            if getattr(self, name) is None:
+                raise ValueError(f"{name} cannot be null")
+        if self.availabilities is not None:
+            ids = [entry.store_id for entry in self.availabilities]
+            if not ids or len(ids) != len(set(ids)):
+                raise ValueError("укажите склады без повторяющихся ID")
+        return self
+
+
 class RuleInline(BaseModel):
     """Settings for one city, sent together with the product it belongs to."""
 
@@ -327,6 +351,9 @@ class ProductOut(BaseModel):
     kaspi_product_id: str
     brand: str | None
     base_price: MoneyOut | None
+    purchase_price: MoneyOut | None = None
+    auto_decrease: bool = True
+    auto_increase: bool = False
     is_active: bool
     availabilities: list[AvailabilityIn]
     rules: list[RuleOut] = Field(default_factory=list)

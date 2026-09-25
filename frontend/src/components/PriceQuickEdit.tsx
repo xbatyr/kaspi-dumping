@@ -8,7 +8,7 @@ import { saveProductLimits } from "@/lib/client";
 import { tenge } from "@/lib/format";
 import type { ProductRules, Rule } from "@/lib/types";
 
-export function PriceQuickEdit({ product, rule }: { product: ProductRules; rule?: Rule }) {
+export function PriceQuickEdit({ product, rule, field }: { product: ProductRules; rule?: Rule; field?: "min_price" | "max_price" | "step" }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [minimum, setMinimum] = useState(rule?.min_price ?? "");
@@ -44,7 +44,7 @@ export function PriceQuickEdit({ product, rule }: { product: ProductRules; rule?
 
   return <div className="group relative inline-block text-right" onMouseEnter={() => { if (window.matchMedia("(hover: hover) and (pointer: fine)").matches) setOpen(true); }} onMouseLeave={() => { if (!saving && window.matchMedia("(hover: hover) and (pointer: fine)").matches) setOpen(false); }}>
     <button type="button" onClick={() => setOpen(true)} aria-expanded={open} aria-label={`Изменить Min, Max и шаг для ${product.sku}`} className="inline-flex min-h-11 cursor-pointer items-center gap-1 font-medium text-slate-900 hover:text-blue-700 md:min-h-0">
-      {tenge(rule?.current_price)} <Pencil className="size-3 text-slate-400 group-hover:text-blue-600" />
+      {tenge(field ? String(rule?.[field] ?? "") || null : rule?.current_price ?? product.base_price)} <Pencil className="size-3 text-slate-400 group-hover:text-blue-600" />
     </button>
     {open && <>
       <button type="button" aria-label="Закрыть редактирование цены" onClick={() => setOpen(false)} className="fixed inset-0 z-40 bg-slate-900/40 md:hidden" />

@@ -65,6 +65,13 @@ class PricingEngine:
         ) -> PricingDecision:
             if price > config.ceiling_price:
                 price, reason = config.ceiling_price, DecisionReason.CAPPED_AT_MAX
+            # Explicit bounds take priority if the old price is outside them.
+            if (current_price is not None
+                and config.floor_price <= current_price <= config.ceiling_price
+                and config.strategy is not PricingStrategy.FIXED_PRICE
+                and ((price < current_price and not config.auto_decrease)
+                     or (price > current_price and not config.auto_increase))):
+                price, reason = current_price, DecisionReason.DIRECTION_DISABLED
             return PricingDecision(
                 new_price=price,
                 previous_price=current_price,
@@ -91,6 +98,7 @@ class PricingEngine:
         # alone instead of chasing a rival's small moves every cycle.
         if (
             current_price is not None
+            and not config.raise_when_first
             and any(offer.merchant_id == config.own_merchant_id for offer in offers)
             and config.floor_price <= current_price <= config.ceiling_price
             and _expected_position(current_price, competitors, own_rating) == 1

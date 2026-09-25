@@ -7,6 +7,7 @@ import type {
   ImportResult,
   KaspiCard,
   ProductDraft,
+  ProductManagement,
   SettingsDraft,
   XmlImportResult,
 } from "@/lib/types";
@@ -45,6 +46,10 @@ async function errorMessage(response: Response): Promise<string> {
 export async function toggleRules(ruleIds: number[], isActive: boolean): Promise<void> {
   if (ruleIds.length === 0) return;
   await send("/api/rules/bulk-toggle", "POST", { is_active: isActive, rule_ids: ruleIds });
+}
+
+export async function manageProduct(sku: string, changes: ProductManagement): Promise<void> {
+  await send(`/api/products/${encodeURIComponent(sku)}/management`, "PATCH", changes);
 }
 
 export async function updateRulesBulk(

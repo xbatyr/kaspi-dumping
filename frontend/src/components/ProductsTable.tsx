@@ -4,23 +4,16 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   AlertTriangle,
-  ExternalLink,
-  History,
   Package,
   PackagePlus,
   Search,
-  SlidersHorizontal,
 } from "lucide-react";
 
-import { ActiveToggle } from "@/components/ActiveToggle";
+import { ProductCard } from "@/components/ProductCard";
 import { AddProductDialog } from "@/components/AddProductDialog";
-import { PositionBadge } from "@/components/PositionBadge";
-import { PriceQuickEdit } from "@/components/PriceQuickEdit";
 import { HistoryDialog } from "@/components/HistoryDialog";
 import { StatusPanel } from "@/components/StatusPanel";
 import { linkKaspiCard } from "@/lib/client";
-import { relativeTime, tenge } from "@/lib/format";
-import { STRATEGY_LABELS } from "@/lib/strategies";
 import type { City, ProductRules, Rule, RuleList, Status } from "@/lib/types";
 
 const DEFAULT_CITY = "750000000";
@@ -29,11 +22,13 @@ interface Props {
   data: RuleList;
   cities: City[];
   search: string;
+  bot: string;
+  sort: string;
   status: Status;
   feedUrl: string;
 }
 
-export function ProductsTable({ data, cities, search, status, feedUrl }: Props) {
+export function ProductsTable({ data, cities, search, status, feedUrl, bot, sort }: Props) {
   const router = useRouter();
   const [city, setCity] = useState(() => {
     const counts = new Map<string, number>();
@@ -85,6 +80,7 @@ export function ProductsTable({ data, cities, search, status, feedUrl }: Props) 
   function goToPage(offset: number) {
     const next = new URLSearchParams();
     if (search) next.set("q", search);
+    next.set("bot", bot); next.set("sort", sort);
     next.set("offset", String(Math.max(0, offset)));
     router.push(`/?${next}`);
   }
@@ -113,6 +109,7 @@ export function ProductsTable({ data, cities, search, status, feedUrl }: Props) 
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <form className="relative flex-1 sm:max-w-xs" action="/">
+          <input type="hidden" name="bot" value={bot} /><input type="hidden" name="sort" value={sort} />
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
           <input
             type="search"
@@ -136,7 +133,7 @@ export function ProductsTable({ data, cities, search, status, feedUrl }: Props) 
         <button
           type="button"
           onClick={() => setAdding(true)}
-          className="inline-flex min-h-11 cursor-pointer items-center justify-center gap-1.5 rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800"
+          className="inline-flex min-h-11 cursor-pointer items-center justify-center gap-1.5 rounded-lg bg-emerald-700 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-800"
         >
           <PackagePlus className="size-4" />
           Добавить товары
@@ -156,6 +153,12 @@ export function ProductsTable({ data, cities, search, status, feedUrl }: Props) 
           </select>
         </label>
         </div>
+      </div>
+
+      <div className="flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-3">
+        <label className="min-w-0 flex-1 text-xs text-slate-600">Работа бота<select className="catalog-input mt-1" value={bot} onChange={event => router.push(`/?${new URLSearchParams({q: search, bot: event.target.value, sort})}`)}><option value="all">Все товары</option><option value="enabled">Бот включён</option><option value="disabled">Бот выключен / вручную</option><option value="unlinked">Без карточки Kaspi</option></select></label>
+        <label className="min-w-0 flex-1 text-xs text-slate-600">Сортировка<select className="catalog-input mt-1" value={sort} onChange={event => router.push(`/?${new URLSearchParams({q: search, bot, sort: event.target.value})}`)}><option value="sku">По артикулу</option><option value="title">По названию</option></select></label>
+        <a href={feedUrl} download="kaspi.xml" className="inline-flex min-h-11 items-center rounded-lg border border-slate-200 px-4 text-sm text-[#345c7f]">Скачать XML</a>
       </div>
 
       {error && (
@@ -178,186 +181,18 @@ export function ProductsTable({ data, cities, search, status, feedUrl }: Props) 
         </div>
       ) : (
         <>
-          {/* Desktop */}
-          <div className="hidden rounded-xl border border-slate-200 bg-white md:block">
-            <table className="w-full text-sm">
-              <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
-                <tr>
-                  <th className="px-3 py-3">
-                    <input type="checkbox" aria-label="Выбрать все правила на странице" checked={allVisibleSelected} onChange={toggleAllVisible} disabled={visibleRuleIds.length === 0} className="cursor-pointer" />
-                  </th>
-                  <th className="px-4 py-3 font-medium">Товар</th>
-                  <th className="px-4 py-3 font-medium">Бот</th>
-                  <th className="px-4 py-3 text-right font-medium">Цена в прайсе</th>
-                  <th className="px-4 py-3 text-right font-medium">Расчётная</th>
-                  <th className="px-4 py-3 text-right font-medium">Min / Max / Шаг</th>
-                  <th className="px-4 py-3 font-medium">Позиция</th>
-                  <th className="px-4 py-3" />
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {data.items.map((product) => {
-                  const rule = ruleFor(product);
-                  return (
-                    <tr key={product.sku} className="hover:bg-slate-50/60">
-                      <td className="px-3 py-3">
-                        <input type="checkbox" aria-label={`Выбрать ${product.sku}`} checked={rule ? selected.has(rule.id) : false} onChange={() => { if (rule) toggleSelected(rule.id); }} disabled={!rule} className="cursor-pointer" />
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="max-w-xs truncate font-medium text-slate-900">
-                          {product.title}
-                        </div>
-                        <div className="mt-0.5 flex items-center gap-2 text-xs text-slate-500">
-                          <span className="font-mono">{product.sku}</span>
-                          {product.kaspi_product_id ? <a
-                            href={`https://kaspi.kz/shop/p/-${product.kaspi_product_id}/`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="inline-flex items-center gap-0.5 hover:text-slate-700"
-                          >
-                            карточка
-                            <ExternalLink className="size-3" />
-                          </a> : <button type="button" onClick={() => void linkCard(product)} className="text-amber-700 underline">Привязать карточку</button>}
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        {rule?.strategy === "manual" ? <span className="text-xs text-slate-500">Вручную</span> : <ActiveToggle
-                          ruleIds={rule ? [rule.id] : []}
-                          isActive={rule?.is_active ?? false}
-                          label={`Репрайсер для ${product.sku}`}
-                          onError={setError}
-                        />}
-                      </td>
-                      <td className="tabular px-4 py-3 text-right font-medium text-slate-900">
-                        <PriceQuickEdit key={`${product.sku}:${rule?.min_price}:${rule?.max_price}:${rule?.step}`} product={product} rule={rule} />
-                        <div className="text-xs font-normal text-slate-400">
-                          {relativeTime(rule?.last_evaluated_at ?? null)}
-                        </div>
-                      </td>
-                      <td className="tabular px-4 py-3 text-right">
-                        {tenge(rule?.last_change?.computed_price)}
-                        {rule?.last_change?.competitor_top1_price && (
-                          <div className="text-xs text-slate-400">
-                            топ-1: {tenge(rule.last_change.competitor_top1_price)}
-                          </div>
-                        )}
-                      </td>
-                      <td className="tabular px-4 py-3 text-right text-slate-600">
-                        {rule ? (
-                          <>
-                            {tenge(rule.min_price)}
-                            <div className="text-xs text-slate-400">{tenge(rule.max_price)}</div>
-                            <div className="text-xs text-slate-400">шаг {tenge(String(rule.step))}</div>
-                          </>
-                        ) : (
-                          "—"
-                        )}
-                      </td>
-                      <td className="px-4 py-3">
-                        <PositionBadge position={rule?.last_change?.expected_position ?? null} />
-                        {rule && (
-                          <div className="mt-1 text-xs text-slate-400">
-                            {STRATEGY_LABELS[rule.strategy]}
-                          </div>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        <button
-                          type="button"
-                          onClick={() => setHistoryOf(product.sku)}
-                          title="История цен"
-                          className="mr-1 inline-flex cursor-pointer items-center rounded-lg border border-slate-200 p-1.5 text-slate-600 hover:border-slate-300 hover:bg-slate-50"
-                        >
-                          <History className="size-3.5" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => product.kaspi_product_id ? router.push(`/strategies?sku=${encodeURIComponent(product.sku)}`) : void linkCard(product)}
-                          className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-700 hover:border-slate-300 hover:bg-slate-50"
-                        >
-                          <SlidersHorizontal className="size-3.5" />
-                          {!product.kaspi_product_id ? "Привязать" : "Настроить"}
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+          <div className="flex items-center justify-between gap-3 text-sm text-slate-600">
+            <label className="flex min-h-11 items-center gap-3"><input type="checkbox" aria-label="Выбрать все правила на странице" checked={allVisibleSelected} onChange={toggleAllVisible} disabled={!visibleRuleIds.length} className="size-5 accent-emerald-600" />Выбрать все на странице</label>
+            <span>{data.total} товаров</span>
           </div>
-
-          {/* Mobile */}
-          <div className="space-y-3 md:hidden">
-            {data.items.map((product) => {
+          <div className="space-y-4">
+            {data.items.map(product => {
               const rule = ruleFor(product);
-              return (
-                <div
-                  key={product.sku}
-                  className="min-w-0 rounded-xl border border-slate-200 bg-white p-4"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-1">
-                        <label className="flex size-11 shrink-0 items-center justify-center"><input type="checkbox" aria-label={`Выбрать ${product.sku}`} checked={rule ? selected.has(rule.id) : false} onChange={() => { if (rule) toggleSelected(rule.id); }} disabled={!rule} className="size-5 cursor-pointer" /></label>
-                        <p className="min-w-0 truncate font-medium text-slate-900">{product.title}</p>
-                      </div>
-                      <p className="ml-12 break-all font-mono text-xs text-slate-500">{product.sku}</p>
-                    </div>
-                    {rule?.strategy === "manual" ? <span className="text-xs text-slate-500">Вручную</span> : <ActiveToggle
-                      ruleIds={rule ? [rule.id] : []}
-                      isActive={rule?.is_active ?? false}
-                      label={`Репрайсер для ${product.sku}`}
-                      onError={setError}
-                    />}
-                  </div>
-
-                  <dl className="mt-3 grid min-w-0 grid-cols-2 gap-x-3 gap-y-3 text-sm">
-                    <div className="min-w-0">
-                      <dt className="text-xs text-slate-500">Цена в прайсе</dt>
-                      <dd className="tabular font-medium text-slate-900">
-                        <PriceQuickEdit key={`${product.sku}:${rule?.min_price}:${rule?.max_price}:${rule?.step}`} product={product} rule={rule} />
-                      </dd>
-                    </div>
-                    <div className="min-w-0">
-                      <dt className="text-xs text-slate-500">Расчётная</dt>
-                      <dd className="tabular text-slate-700">
-                        {tenge(rule?.last_change?.computed_price)}
-                      </dd>
-                    </div>
-                    <div className="col-span-2 min-w-0">
-                      <dt className="text-xs text-slate-500">Min / Max / Шаг</dt>
-                      <dd className="tabular text-slate-700">
-                        {rule ? `${tenge(rule.min_price)} — ${tenge(rule.max_price)} · шаг ${tenge(String(rule.step))}` : "—"}
-                      </dd>
-                    </div>
-                    <div className="col-span-2 min-w-0">
-                      <dt className="text-xs text-slate-500">Позиция</dt>
-                      <dd>
-                        <PositionBadge position={rule?.last_change?.expected_position ?? null} />
-                      </dd>
-                    </div>
-                  </dl>
-
-                  <div className="mt-3 flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => product.kaspi_product_id ? router.push(`/strategies?sku=${encodeURIComponent(product.sku)}`) : void linkCard(product)}
-                      className="inline-flex min-h-11 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700"
-                    >
-                      <SlidersHorizontal className="size-4" />
-                      {!product.kaspi_product_id ? "Привязать" : "Настроить"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setHistoryOf(product.sku)}
-                      aria-label="История цен"
-                      className="inline-flex min-h-11 min-w-11 cursor-pointer items-center justify-center rounded-lg border border-slate-200 px-3 py-2 text-slate-600"
-                    >
-                      <History className="size-4" />
-                    </button>
-                  </div>
-                </div>
-              );
+              return <ProductCard key={product.sku} product={product} rule={rule}
+                cityName={cities.find(item => item.id === city)?.name ?? city}
+                selected={rule ? selected.has(rule.id) : false}
+                onSelect={() => { if (rule) toggleSelected(rule.id); }}
+                onHistory={() => setHistoryOf(product.sku)} onLink={() => void linkCard(product)} />;
             })}
           </div>
         </>

@@ -52,10 +52,14 @@ async function get<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function fetchRules(params: {
   search?: string;
+  bot?: string;
+  sort?: string;
   limit?: number;
   offset?: number;
 }): Promise<RuleList> {
   const query = new URLSearchParams();
+  if (params.bot) query.set("bot", params.bot);
+  if (params.sort) query.set("sort", params.sort);
   if (params.search) query.set("search", params.search);
   query.set("limit", String(params.limit ?? 50));
   query.set("offset", String(params.offset ?? 0));

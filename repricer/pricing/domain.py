@@ -45,6 +45,7 @@ class PricingStrategy(StrEnum):
 class DecisionReason(StrEnum):
     #: Our current XML price already ranks first; no new feed price is needed.
     ALREADY_FIRST = "already_first"
+    DIRECTION_DISABLED = "direction_disabled"
     #: The selected strategy's target was within [min_price, max_price].
     STRATEGY_TARGET = "strategy_target"
     #: The computed price was above max_price, so it was capped.
@@ -98,6 +99,9 @@ class PricingConfig:
     target_position: int | None = None
     #: The product's own price, required by FIXED_PRICE.
     base_price: Decimal | None = None
+    auto_decrease: bool = True
+    auto_increase: bool = True
+    raise_when_first: bool = False
 
     def __post_init__(self) -> None:
         _check_merchant_id(self.own_merchant_id, "own_merchant_id")

@@ -97,6 +97,34 @@ def rule_payload(**overrides: Any) -> dict[str, Any]:
 
 # --- GET /api/rules -----------------------------------------------------------
 
+def test_management_cost_stock_and_flags_reach_feed(session: Session, client: TestClient):
+    product = make_product(session, base_price=400000, cities={ALMATY: 362000})
+    store = product.availabilities[0].store_id
+    response = client.patch(f"/api/products/{product.sku}/management", json={
+        "purchase_price": "250000", "auto_increase": True, "auto_decrease": False,
+        "availabilities": [{"store_id": store, "stock_count": 7, "preorder_days": 3, "available": False}],
+    })
+    assert response.status_code == 200, response.text
+    item = client.get("/api/rules").json()["items"][0]
+    assert item["purchase_price"] == "250000"
+    assert item["auto_increase"] and not item["auto_decrease"]
+    assert item["rules"][0]["current_price"] == "362000"
+    xml = ET.fromstring(client.get("/feed/kaspi.xml").content)
+    availability = xml.find(f".//{NS}availability")
+    assert availability is not None
+    assert availability.attrib == {"storeId": store, "available": "no", "stockCount": "7", "preOrder": "3"}
+
+
+def test_management_rejects_unknown_stock_and_preserves_cost(session: Session, client: TestClient):
+    product = make_product(session, base_price=400000)
+    response = client.patch(f"/api/products/{product.sku}/management", json={
+        "purchase_price": "5", "availabilities": [{"store_id": "WRONG"}],
+    })
+    assert response.status_code == 422
+    session.rollback()
+    assert client.patch(f"/api/products/{product.sku}/management", json={"purchase_price": "-1"}).status_code == 422
+
+
 
 def test_lists_products_with_their_rules_and_status(session: Session, client: TestClient) -> None:
     make_product(session, "IPH-256", base_price=400000, cities={ALMATY: 362000, ASTANA: 366000})

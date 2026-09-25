@@ -34,6 +34,7 @@ export interface Rule {
   is_active: boolean;
   current_price: Money | null;
   last_evaluated_at: string | null;
+  market_snapshot?: { position: number | null; offer_count: number; observed_price: Money | null; leader_price: Money; expected_position: number } | null;
   last_change: RuleStatus | null;
 }
 
@@ -44,6 +45,10 @@ export interface ProductRules {
   brand: string | null;
   base_price: Money | null;
   is_active: boolean;
+  purchase_price: Money | null;
+  auto_decrease: boolean;
+  auto_increase: boolean;
+  availabilities: AvailabilityDraft[];
   rules: Rule[];
 }
 
@@ -88,6 +93,14 @@ export interface AvailabilityDraft {
   store_id: string;
   available: boolean;
   stock_count: number | null;
+  preorder_days?: number | null;
+}
+
+export interface ProductManagement {
+  purchase_price?: Money | null;
+  auto_decrease?: boolean;
+  auto_increase?: boolean;
+  availabilities?: AvailabilityDraft[];
 }
 
 export interface RuleDraftInline {

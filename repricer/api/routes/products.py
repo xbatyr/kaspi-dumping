@@ -22,6 +22,7 @@ from repricer.api.schemas import (
     ImportIn,
     ImportResult,
     ProductIn,
+    ProductManagementIn,
     ProductOut,
     RuleOut,
     XmlImportResult,
@@ -101,6 +102,27 @@ def update_product(
             "the SKU is the product's identity here and cannot be renamed",
         )
     _apply(product, payload)
+    session.commit()
+    session.refresh(product)
+    return _product_out(product)
+
+
+@router.patch("/{sku}/management", summary="Update cost, automation directions and warehouse stock")
+def manage_product(sku: str, payload: ProductManagementIn,
+                   session: SessionDep, merchant: MerchantDep) -> ProductOut:
+    product = _by_sku(session, merchant, sku)
+    for name in payload.model_fields_set - {"availabilities"}:
+        setattr(product, name, getattr(payload, name))
+    if payload.availabilities is not None:
+        # Update existing points only: a typo must not silently remove a warehouse.
+        by_store = {entry.store_id: entry for entry in product.availabilities}
+        if any(entry.store_id not in by_store for entry in payload.availabilities):
+            raise HTTPException(422, "Неизвестный склад. Сначала импортируйте его из XML магазина.")
+        for entry in payload.availabilities:
+            stock = by_store[entry.store_id]
+            stock.available = entry.available
+            stock.stock_count = entry.stock_count
+            stock.preorder_days = entry.preorder_days
     session.commit()
     session.refresh(product)
     return _product_out(product)
@@ -304,6 +326,9 @@ def _product_out(product: Product) -> ProductOut:
         kaspi_product_id=product.kaspi_product_id,
         brand=product.brand,
         base_price=product.base_price,
+        purchase_price=product.purchase_price,
+        auto_decrease=product.auto_decrease,
+        auto_increase=product.auto_increase,
         is_active=product.is_active,
         availabilities=[
             AvailabilityIn(
