@@ -55,6 +55,7 @@ def search_kaspi(
             rating=card.rating,
             reviews_count=card.reviews_count,
             link=card.link if card.link.startswith("http") else f"https://kaspi.kz/shop{card.link}",
+            image_url=card.image_url,
         )
         for card in found
     ]

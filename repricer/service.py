@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 
 from repricer.db.models import ShopSettings
 from repricer.db.settings_store import load_settings
+from repricer.images import refresh_missing_images
 from repricer.scraper import KaspiClient, ProxyPool, RateLimiter
 from repricer.telegram.alerts import AlertSink, BroadcastTelegramSink, LoggingSink, TelegramSink
 from repricer.uploader import DatabaseCatalog, LocalFeedStorage, MerchantIdentity, SyncManager
@@ -161,6 +162,12 @@ class WorkerService:
                 # A cycle can fail on anything: a database blip, a full disk, a
                 # changed Kaspi response. The service sleeps and tries again.
                 logger.exception("Цикл упал")
+            if not self._dry_run and config is not None:
+                try:
+                    with self._session_factory() as session:
+                        refresh_missing_images(session, limit=10)
+                except Exception:
+                    logger.exception("Не удалось обновить изображения товаров")
             wait = config.interval_seconds if (config and enabled and strategy_ready) else IDLE_SECONDS
             if stop.wait(wait):
                 logger.info("Остановка по сигналу")

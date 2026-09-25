@@ -145,6 +145,7 @@ def list_rules(
             sku=product.sku,
             title=product.title,
             kaspi_product_id=product.kaspi_product_id,
+            image_url=product.image_url,
             brand=product.brand,
             base_price=product.base_price,
             purchase_price=product.purchase_price,

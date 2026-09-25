@@ -649,6 +649,7 @@ SEARCH_RESPONSE = {
             "rating": 4.9,
             "reviewsQuantity": 8348,
             "shopLink": "/p/apple-iphone-13-128gb-102298404/?c=750000000",
+            "previewImages": [{"small": "https://resources.cdn-kaspi.kz/img/m/p/example.jpg?format=preview-small"}],
         },
         {"id": "112233445", "title": "Чехол", "unitPrice": 4900.0},
         {"nonsense": True},
@@ -667,6 +668,8 @@ def test_search_returns_cards_with_their_ids() -> None:
     assert first.title.startswith("Apple iPhone 13")
     assert (first.brand, first.price, first.rating) == ("Apple", Decimal(354975), 4.9)
     assert first.link.endswith("102298404/?c=750000000")
+    assert first.image_url == "https://resources.cdn-kaspi.kz/img/m/p/example.jpg?format=preview-small"
+    assert cards[1].image_url is None
 
 
 def test_search_uses_a_get_with_the_query_in_the_url() -> None:

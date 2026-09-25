@@ -32,8 +32,12 @@ export function MarginDialog({ product, onClose }: { product: ProductRules; onCl
   }, [onClose]);
 
   useEffect(() => {
-    if (!Number.isFinite(Number(price)) || Number(price) <= 0) { setResult(null); return; }
     const timer = setTimeout(async () => {
+      if (!Number.isFinite(Number(price)) || Number(price) <= 0) {
+        setResult(null);
+        setBusy(false);
+        return;
+      }
       setBusy(true);
       try {
         setResult(await previewMargin({

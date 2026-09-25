@@ -2,6 +2,7 @@
 
 import { useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
 import { Calculator, ExternalLink, History, Package } from "lucide-react";
 import { ActiveToggle } from "@/components/ActiveToggle";
 import { MarginDialog } from "@/components/MarginDialog";
@@ -12,6 +13,15 @@ import type { Margin as MarginValue, ProductRules, Rule, ProductManagement } fro
 
 function Detail({ label, children }: { label: string; children: ReactNode }) {
   return <div className="catalog-cell"><dt className="catalog-label">{label}</dt><dd className="min-w-0 tabular">{children}</dd></div>;
+}
+
+function ProductThumbnail({ src, title }: { src: string | null; title: string }) {
+  const [failed, setFailed] = useState(false);
+  return <span className="mt-0.5 flex size-12 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-slate-100 bg-slate-50 sm:size-14">
+    {src && !failed
+      ? <Image src={src} alt={title} width={56} height={56} unoptimized onError={() => setFailed(true)} className="size-full object-contain" />
+      : <Package aria-hidden="true" className="size-6 text-slate-400" />}
+  </span>;
 }
 
 /** The profit the backend worked out for this price: purchase price, Kaspi's
@@ -57,7 +67,7 @@ export function ProductCard({ product, rule, cityName, selected, onSelect, onHis
   return <article className="product-card rounded-xl border border-slate-200 bg-white p-3 sm:p-4">
     <header className="flex items-start gap-3">
       <label className="flex min-h-8 shrink-0 items-center"><input type="checkbox" aria-label={`Выбрать ${product.sku}`} checked={selected} disabled={!rule} onChange={onSelect} className="size-4 accent-emerald-600" /></label>
-      <Package aria-hidden="true" className="mt-1 hidden size-6 shrink-0 text-slate-400 sm:block" />
+      <ProductThumbnail key={product.image_url} src={product.image_url} title={product.title} />
       <div className="min-w-0 flex-1">
         {product.kaspi_product_id ? <a className="break-words text-sm font-medium text-[#345c7f] hover:underline" href={`https://kaspi.kz/shop/p/-${product.kaspi_product_id}/`} target="_blank" rel="noreferrer">{product.title} <ExternalLink className="inline size-3" /></a> : <button onClick={onLink} className="text-left text-sm font-medium text-[#345c7f]">{product.title}</button>}
         <p className="mt-1 break-all text-xs leading-5 text-slate-500">Артикул: {product.sku}{product.brand && ` · ${product.brand}`}</p>

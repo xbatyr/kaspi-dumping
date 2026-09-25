@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
 import { AlertTriangle, FileUp, Loader2, PackagePlus, Search, Star, X } from "lucide-react";
 
 import { importKaspiXml, importProducts, searchKaspi } from "@/lib/client";
@@ -227,7 +228,10 @@ export function AddProductDialog({ cities, onClose }: { cities: City[]; onClose:
                           onClick={() => take(card)}
                           className="w-full cursor-pointer rounded-lg border border-slate-200 bg-white p-2 text-left hover:border-slate-400"
                         >
-                          <span className="block truncate text-sm text-slate-900">{card.title}</span>
+                          <span className="flex items-center gap-2">
+                            {card.image_url && <Image src={card.image_url} alt="" width={40} height={40} unoptimized className="size-10 shrink-0 rounded object-contain" />}
+                            <span className="block min-w-0 truncate text-sm text-slate-900">{card.title}</span>
+                          </span>
                           <span className="mt-0.5 flex items-center gap-2 text-xs text-slate-500">
                             <span className="font-mono">{card.kaspi_product_id}</span>
                             {card.price && <span>{tenge(card.price)}</span>}

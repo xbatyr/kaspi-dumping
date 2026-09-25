@@ -66,6 +66,7 @@ export interface ProductRules {
   sku: string;
   title: string;
   kaspi_product_id: string;
+  image_url: string | null;
   brand: string | null;
   base_price: Money | null;
   is_active: boolean;
@@ -288,4 +289,5 @@ export interface KaspiCard {
   rating: number | null;
   reviews_count: number;
   link: string;
+  image_url: string | null;
 }

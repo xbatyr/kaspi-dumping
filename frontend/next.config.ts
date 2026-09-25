@@ -3,6 +3,9 @@ import type { NextConfig } from "next";
 /** Calls to FastAPI go through src/app/api/[...path]/route.ts rather than a
  *  rewrite here: a rewrite's destination is frozen into the build, while the
  *  route handler reads API_URL at request time. */
-const nextConfig: NextConfig = { output: "standalone" };
+const nextConfig: NextConfig = {
+  output: "standalone",
+  images: { remotePatterns: [{ protocol: "https", hostname: "resources.cdn-kaspi.kz", pathname: "/img/**" }] },
+};
 
 export default nextConfig;

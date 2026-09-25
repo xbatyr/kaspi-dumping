@@ -1,0 +1,11 @@
+[Unit]
+Description=Check GitHub main for Kaspi Repricer updates
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Persistent=true
+Unit=kaspi-repricer-update.service
+
+[Install]
+WantedBy=timers.target

@@ -234,6 +234,9 @@ def _apply_xml_offer(product: Product, offer: ImportedOffer) -> None:
     product.brand = offer.brand
     product.is_active = True
     if offer.kaspi_product_id:
+        if product.kaspi_product_id != offer.kaspi_product_id:
+            product.image_url = None
+            product.image_checked_at = None
         product.kaspi_product_id = offer.kaspi_product_id
     if offer.base_price is not None:
         product.base_price = offer.base_price
@@ -271,6 +274,9 @@ def _apply_xml_offer(product: Product, offer: ImportedOffer) -> None:
 def _apply(product: Product, payload: ProductIn) -> None:
     product.title = payload.title
     if payload.kaspi_product_id or not product.kaspi_product_id:
+        if product.kaspi_product_id != payload.kaspi_product_id:
+            product.image_url = None
+            product.image_checked_at = None
         product.kaspi_product_id = payload.kaspi_product_id
     product.brand = payload.brand
     product.base_price = payload.base_price
@@ -336,6 +342,7 @@ def _product_out(product: Product) -> ProductOut:
         sku=product.sku,
         title=product.title,
         kaspi_product_id=product.kaspi_product_id,
+        image_url=product.image_url,
         brand=product.brand,
         base_price=product.base_price,
         purchase_price=product.purchase_price,

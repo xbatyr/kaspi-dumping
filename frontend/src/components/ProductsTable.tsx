@@ -150,6 +150,7 @@ export function ProductsTable({ data, cities, categories, filters, status, feedU
           <PackagePlus className="size-4" />
           Добавить товары
         </button>
+        <button type="button" onClick={() => setTools(true)} className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 hover:border-slate-300 hover:bg-slate-50"><SlidersHorizontal className="size-4" />Инструменты</button>
         <label className="flex min-w-0 items-center gap-2 text-sm text-slate-600">
           Город
           <select
@@ -167,7 +168,9 @@ export function ProductsTable({ data, cities, categories, filters, status, feedU
         </div>
       </div>
 
-      <div className="grid gap-3 rounded-xl border border-slate-200 bg-white p-3 sm:grid-cols-2 lg:grid-cols-[repeat(4,minmax(0,1fr))_auto]">
+      <details key={`${sale}:${category}:${bot}:${sort}`} className="rounded-xl border border-slate-200 bg-white px-4 py-3" open={sale !== "all" || category !== "" || bot !== "all" || sort !== "sku"}>
+        <summary className="cursor-pointer text-sm font-medium text-slate-700">Фильтры и сортировка{(sale !== "all" || category !== "" || bot !== "all" || sort !== "sku") && <span className="ml-2 rounded-full bg-emerald-50 px-2 py-0.5 text-xs text-emerald-800">Применены</span>}</summary>
+      <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <label className="min-w-0 text-xs text-slate-600">Продажа
           <select className="catalog-input mt-1" value={sale} onChange={event => go({ sale: event.target.value })}>
             <option value="all">Все товары</option>
@@ -200,11 +203,9 @@ export function ProductsTable({ data, cities, categories, filters, status, feedU
             <option value="updated">Недавно изменённые</option>
           </select>
         </label>
-        <div className="flex items-end gap-2">
-          <button type="button" onClick={() => setTools(true)} className="inline-flex min-h-11 cursor-pointer items-center gap-1.5 rounded-lg border border-slate-300 px-3 text-sm font-medium text-slate-800 hover:bg-slate-50"><SlidersHorizontal className="size-4" />Инструменты</button>
-          <a href={feedUrl} download="kaspi.xml" className="inline-flex min-h-11 items-center rounded-lg border border-slate-200 px-4 text-sm text-[#345c7f]">Скачать XML</a>
-        </div>
       </div>
+      <a href={feedUrl} download="kaspi.xml" className="mt-3 inline-flex min-h-11 items-center rounded-lg border border-slate-200 px-4 text-sm text-[#345c7f]">Скачать XML</a>
+      </details>
       <datalist id="product-categories">{categories.map(item => item.name && <option key={item.name} value={item.name} />)}</datalist>
 
       {error && (

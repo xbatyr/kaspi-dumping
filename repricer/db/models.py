@@ -88,6 +88,8 @@ class Product(TimestampMixin, Base):
     sku: Mapped[str] = mapped_column(String(128))
     #: Product card ID, from kaspi.kz/shop/p/<slug>-<id>/.
     kaspi_product_id: Mapped[str] = mapped_column(String(64), index=True)
+    image_url: Mapped[str | None] = mapped_column(String(512))
+    image_checked_at: Mapped[datetime | None]
     #: Goes into the price list feed as <model>.
     title: Mapped[str] = mapped_column(String(512))
     #: Mandatory in the feed as <brand>; nullable because products are often
