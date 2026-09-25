@@ -33,7 +33,7 @@ export function ProductCard({ product, rule, cityName, selected, onSelect, onHis
   const market = rule?.market_snapshot;
   async function save(changes: ProductManagement) {
     setBusy(true); setError(null);
-    try { await manageProduct(product.sku, changes); setEditing(false); router.refresh(); }
+    try { await manageProduct(product.sku, changes); if ("purchase_price" in changes) setEditing(false); router.refresh(); }
     catch (failure) { setError(failure instanceof Error ? failure.message : "Не удалось сохранить"); }
     finally { setBusy(false); }
   }
@@ -64,9 +64,9 @@ export function ProductCard({ product, rule, cityName, selected, onSelect, onHis
         <Detail label="Цена первого места">{tenge(market?.leader_price)}</Detail>
         <Detail label="Цена на Kaspi">{tenge(market?.observed_price)}</Detail>
         <Detail label="Цена в XML / Маржа"><PriceQuickEdit key={`${rule?.id}:${rule?.min_price}:${rule?.max_price}:${rule?.step}`} product={product} rule={rule} /><Margin price={rule?.current_price ?? product.base_price} cost={product.purchase_price} /></Detail>
-        <Detail label="Мин. цена / Маржа">{tenge(rule?.min_price)}<Margin price={rule?.min_price} cost={product.purchase_price} /></Detail>
-        <Detail label="Макс. цена / Маржа">{tenge(rule?.max_price)}<Margin price={rule?.max_price} cost={product.purchase_price} /></Detail>
-        <Detail label="Шаг">{rule ? tenge(String(rule.step)) : "—"}</Detail>
+        <Detail label="Мин. цена / Маржа"><PriceQuickEdit key={`min:${rule?.min_price}:${rule?.max_price}:${rule?.step}`} product={product} rule={rule} field="min_price" /><Margin price={rule?.min_price} cost={product.purchase_price} /></Detail>
+        <Detail label="Макс. цена / Маржа"><PriceQuickEdit key={`max:${rule?.min_price}:${rule?.max_price}:${rule?.step}`} product={product} rule={rule} field="max_price" /><Margin price={rule?.max_price} cost={product.purchase_price} /></Detail>
+        <Detail label="Шаг"><PriceQuickEdit key={`step:${rule?.min_price}:${rule?.max_price}:${rule?.step}`} product={product} rule={rule} field="step" /></Detail>
       </dl>
       <div className="min-w-0 rounded-xl bg-[#f7f8f8] px-4 pb-4">
         <div className="flex items-center justify-between gap-3 py-3"><h3 className="text-sm text-slate-500">Точки продаж / Остатки</h3><button aria-label={`Изменить остатки ${product.sku}`} onClick={openEditor} className="flex size-11 items-center justify-center text-[#345c7f]"><Pencil className="size-4" /></button></div>
