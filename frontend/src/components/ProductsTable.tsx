@@ -105,7 +105,10 @@ export function ProductsTable({ data, cities, search, status, feedUrl, bot, sort
 
   return (
     <div className="space-y-4">
-      <StatusPanel status={status} feedUrl={feedUrl} />
+      <details className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+        <summary className="cursor-pointer text-sm text-slate-600">Товаров: <b>{status.products_total}</b> · Правил в работе: <b>{status.rules_active}</b> · {status.feed_ready ? "XML готов" : "XML требует внимания"}<span className="ml-2 text-xs text-[#345c7f]">Состояние магазина и ссылка XML</span></summary>
+        <div className="mt-3"><StatusPanel status={status} feedUrl={feedUrl} /></div>
+      </details>
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <form className="relative flex-1 sm:max-w-xs" action="/">
@@ -127,7 +130,7 @@ export function ProductsTable({ data, cities, search, status, feedUrl, bot, sort
             onClick={() => router.push(`/strategies?bulk=${selectedRuleIds.join(",")}`)}
             className="min-h-11 cursor-pointer rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50"
           >
-            Настроить выбранные ({selectedRuleIds.length})
+            Массовые настройки ({selectedRuleIds.length})
           </button>
         )}
         <button
@@ -185,7 +188,10 @@ export function ProductsTable({ data, cities, search, status, feedUrl, bot, sort
             <label className="flex min-h-11 items-center gap-3"><input type="checkbox" aria-label="Выбрать все правила на странице" checked={allVisibleSelected} onChange={toggleAllVisible} disabled={!visibleRuleIds.length} className="size-5 accent-emerald-600" />Выбрать все на странице</label>
             <span>{data.total} товаров</span>
           </div>
-          <div className="space-y-4">
+          <div className="catalog-grid catalog-head sticky top-0 z-20 hidden rounded-lg border border-slate-200 bg-white lg:grid" aria-hidden="true">
+            {['Город', 'Место', 'Цена 1 места / Магазин', 'Текущая цена (XML) / Маржа', 'Мин. цена / Маржа', 'Макс. цена / Маржа', 'Шаг', 'Точки продаж / Остатки', 'Действия'].map(label => <div key={label}>{label}</div>)}
+          </div>
+          <div className="space-y-3">
             {data.items.map(product => {
               const rule = ruleFor(product);
               return <ProductCard key={product.sku} product={product} rule={rule}

@@ -34,7 +34,7 @@ export interface Rule {
   is_active: boolean;
   current_price: Money | null;
   last_evaluated_at: string | null;
-  market_snapshot?: { position: number | null; offer_count: number; observed_price: Money | null; leader_price: Money; expected_position: number } | null;
+  market_snapshot?: { position: number | null; offer_count: number; observed_price: Money | null; leader_price: Money; leader_name?: string; leader_merchant_id?: string; expected_position: number } | null;
   last_change: RuleStatus | null;
 }
 

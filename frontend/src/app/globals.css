@@ -23,3 +23,22 @@ body {
 input { accent-color: #059669; caret-color: #047857; }
 button:not(:disabled), select { cursor: pointer; }
 button:disabled { cursor: not-allowed; }
+
+/* One shared column grid keeps compact product rows aligned with their heading. */
+.catalog-grid { padding: 4px 12px; font-size: 13px; }
+.catalog-cell { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 0; border-bottom: 1px solid #e9edee; }
+.catalog-cell:last-child { border-bottom: 0; }
+.catalog-cell dd { text-align: right; }
+.catalog-label { font-size: 12px; color: #64748b; }
+.catalog-direction { display: flex; align-items: center; justify-content: flex-end; gap: 6px; min-height: 36px; font-size: 12px; white-space: nowrap; }
+.catalog-direction input { width: 16px; height: 16px; }
+@media (min-width: 1024px) {
+  .catalog-grid { display: grid; grid-template-columns: .65fr .55fr 1.15fr 1.1fr 1.1fr 1.1fr .65fr 1.25fr 1.35fr; gap: 12px; padding: 12px; }
+  .catalog-cell { display: block; padding: 0; border: 0; }
+  .catalog-cell dd { text-align: left; }
+  .catalog-label { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .catalog-head { margin-left: 16px; margin-right: 16px; font-size: 11px; font-weight: 600; line-height: 1.4; }
+  .catalog-direction { justify-content: flex-start; min-height: 28px; }
+  .catalog-cell .group > button { font-size: 13px; font-weight: 400; color: #345c7f; text-decoration: underline dotted; text-underline-offset: 4px; }
+  .catalog-cell .group > button svg { display: none; }
+}

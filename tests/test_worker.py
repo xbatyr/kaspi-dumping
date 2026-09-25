@@ -160,6 +160,22 @@ def prices_in_feed(feed: ET.Element, sku: str) -> dict[str, str]:
 
 # --- Grouping -----------------------------------------------------------------
 
+@pytest.mark.parametrize("leader_id", [MERCHANT.merchant_id, "rival"])
+def test_market_leader_name_matches_displayed_price(session: Session, build_worker: Any, leader_id: str) -> None:
+    product = make_product(session, "LEADER", IPHONE)
+    other_id = "rival" if leader_id == MERCHANT.merchant_id else MERCHANT.merchant_id
+    client = FakeKaspiClient({(IPHONE, ALMATY): [
+        competitor(other_id, 410000), competitor(leader_id, 360000),
+    ]})
+    worker, _, _ = build_worker(client)
+    worker.run_once()
+    session.expire_all()
+    market = product.rules[0].market_snapshot
+    assert market is not None
+    assert market["leader_price"] == "360000"
+    assert market["leader_merchant_id"] == leader_id
+    assert market["leader_name"] == f"Shop {leader_id}"
+
 
 def snapshot(sku: str, city_id: str) -> RuleSnapshot:
     return RuleSnapshot(

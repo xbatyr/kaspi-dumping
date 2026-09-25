@@ -401,6 +401,8 @@ class RepricingWorker:
                     "offer_count": len(ranked),
                     "observed_price": str(ranked[own_index].price) if own_index is not None else None,
                     "leader_price": str(ranked[0].price),
+                    "leader_merchant_id": ranked[0].merchant_id,
+                    "leader_name": ranked[0].merchant_name or ranked[0].merchant_id,
                     "expected_position": decision.expected_position,
                 },
             )
