@@ -13,6 +13,7 @@ from repricer.pricing.engine import DEFAULT_FALLBACK_MAX_POSITION, PricingEngine
 from repricer.pricing.limits import (
     MAX_DISCOUNT_PERCENT,
     MAX_MARKUP_PERCENT,
+    InvertedLimitsError,
     PercentLimits,
     PriceLimits,
     limits_from_current_price,
@@ -36,6 +37,7 @@ __all__ = [
     "MAX_TARGET_POSITION",
     "PRICE_QUANTUM",
     "CompetitorOffer",
+    "InvertedLimitsError",
     "DecisionReason",
     "MarginBreakdown",
     "MarginInputs",

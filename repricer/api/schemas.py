@@ -12,6 +12,7 @@ from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, PlainSerializer, model_validator
 
+from repricer.cities import DEFAULT_CITY_ID
 from repricer.pricing import (
     DEFAULT_TAX_PERCENT,
     MAX_DISCOUNT_PERCENT,
@@ -306,6 +307,14 @@ class BulkToolsIn(BaseModel):
 
     #: Which products to touch; empty means every product of the shop.
     skus: list[Sku] = Field(default_factory=list, max_length=5_000)
+    #: "Для товаров на продаже": new limits and raised prices only for what
+    #: Kaspi shows now. Does not narrow disable_decrease_when_off_sale.
+    only_on_sale: bool = False
+    #: "Применить также для товаров, которые уже имеют минимальную цену". Off
+    #: leaves a product that already has a price band with its own floor.
+    overwrite_min: bool = True
+    #: The same for the ceiling.
+    overwrite_max: bool = True
     #: Set a floor this far below each product's own price and allow lowering.
     set_min_percent: DiscountPercent | None = None
     #: Set a ceiling this far above each product's own price and allow raising.
@@ -342,11 +351,34 @@ class BulkToolsOut(BaseModel):
     skipped: dict[str, int] = Field(default_factory=dict)
 
 
+class SaleCountsOut(BaseModel):
+    """How many products each option of the sale filter would show."""
+
+    all: int = 0
+    on: int = 0
+    off: int = 0
+
+
 class RuleListOut(BaseModel):
     items: list[ProductRulesOut]
     total: int = Field(description="Products matching the filters, ignoring limit and offset.")
     limit: int
     offset: int
+    #: Counted under every other filter, so the menu can say "На продаже (172)".
+    sale_counts: SaleCountsOut = Field(default_factory=SaleCountsOut)
+
+
+class BulkSaleIn(BaseModel):
+    """Put many products on sale or take them off, from the selection bar."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    skus: list[Sku] = Field(min_length=1, max_length=5_000)
+    is_active: bool
+
+
+class BulkSaleOut(BaseModel):
+    updated: int
 
 
 class BulkToggleIn(BaseModel):
@@ -573,6 +605,8 @@ class SettingsOut(BaseModel):
     tax_percent: Decimal
     commission_percent: Decimal
     delivery_cost: MoneyOut
+    home_city_id: str
+    compete_home_city_only: bool
 
 
 class SettingsIn(BaseModel):
@@ -594,6 +628,9 @@ class SettingsIn(BaseModel):
         default=Decimal(0), description="Комиссия Kaspi по договору, обычно 8–15%."
     )
     delivery_cost: Annotated[Decimal, Field(ge=0, max_digits=12, decimal_places=2)] = Decimal(0)
+    home_city_id: str = Field(default=DEFAULT_CITY_ID, pattern=r"^\d{1,16}$")
+    #: Reprice the home city only; other cities sell at the product's own price.
+    compete_home_city_only: bool = False
 
     @model_validator(mode="after")
     def tidy(self) -> Self:

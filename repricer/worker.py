@@ -278,7 +278,11 @@ class RepricingWorker:
         changes = latest_changes(session, [product.id for _rule, product in rows])
 
         snapshots: list[RuleSnapshot] = []
+        home_city = shop.competing_city_id if shop is not None else None
         for rule, product in rows:
+            if home_city is not None and rule.city_id != home_city:
+                # The feed sells this city at the product's own price.
+                continue
             if shared is not None and (
                 rule.city_id not in shared.global_city_ids
                 or rule.strategy is PricingStrategy.MANUAL

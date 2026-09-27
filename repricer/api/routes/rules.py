@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, selectinload
 from repricer.api.catalog_query import (
     bot_filter,
     category_filter,
+    on_sale,
     order_by,
     product_margins,
     sale_filter,
@@ -34,6 +35,7 @@ from repricer.api.schemas import (
     RuleOut,
     RuleStatusOut,
     RuleUpdate,
+    SaleCountsOut,
 )
 from repricer.db.models import PriceHistory, Product, RepricerRule
 from repricer.db.queries import latest_changes
@@ -106,11 +108,12 @@ def list_rules(
 ) -> RuleListOut:
     shop = load_settings(session)
     filters = [Product.merchant_id == merchant.merchant_id]
+    sale_predicate = sale_filter(sale)
     filters += [
         predicate
         for predicate in (
             bot_filter(bot),
-            sale_filter(sale),
+            sale_predicate,
             category_filter(category),
             search_filter(search),
         )
@@ -130,6 +133,13 @@ def list_rules(
         )
 
     total = session.scalar(select(func.count()).select_from(Product).where(*filters)) or 0
+    # The same filters minus the sale switch, in one pass over the products.
+    unsold_filters = [predicate for predicate in filters if predicate is not sale_predicate]
+    count_all, count_on = session.execute(
+        select(func.count(), func.count().filter(on_sale()))
+        .select_from(Product)
+        .where(*unsold_filters)
+    ).one()
     products = session.scalars(
         select(Product)
         .where(*filters)
@@ -175,7 +185,13 @@ def list_rules(
         )
         for product in products
     ]
-    return RuleListOut(items=items, total=total, limit=limit, offset=offset)
+    return RuleListOut(
+        items=items,
+        total=total,
+        limit=limit,
+        offset=offset,
+        sale_counts=SaleCountsOut(all=count_all, on=count_on, off=count_all - count_on),
+    )
 
 
 @router.get("/categories", summary="Category menu of the catalogue")

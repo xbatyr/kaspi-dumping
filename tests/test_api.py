@@ -13,6 +13,7 @@ from repricer.api.app import create_app
 from repricer.api.deps import get_merchant, get_session
 from repricer.api.settings import ApiSettings, get_settings
 from repricer.db import PriceHistory, Product, ProductAvailability, RepricerRule, ShopSettings
+from repricer.db.settings_store import load_settings
 from repricer.pricing import DecisionReason, PricingStrategy
 from repricer.uploader import MerchantIdentity
 
@@ -621,6 +622,35 @@ def test_feed_serves_the_current_prices(session: Session, client: TestClient) ->
         ALMATY: "362000",
         ASTANA: "366000",
     }
+
+
+def test_home_city_only_sells_other_cities_at_the_own_price(
+    session: Session, client: TestClient
+) -> None:
+    make_product(session, "IPH-256", base_price=400000, cities={ALMATY: 362000, ASTANA: 366000})
+    shop = load_settings(session)
+    shop.home_city_id, shop.compete_home_city_only = ALMATY, True
+    session.flush()
+
+    root = ET.fromstring(client.get("/feed/kaspi.xml").content)
+
+    # Astana stays on sale, at the base price rather than the bot's last price.
+    assert {node.get("cityId"): node.text for node in root.iter(f"{NS}cityprice")} == {
+        ALMATY: "362000",
+        ASTANA: "400000",
+    }
+
+
+def test_home_city_setting_round_trips(client: TestClient) -> None:
+    saved = client.put(
+        "/api/settings",
+        json=settings_payload(home_city_id=ASTANA, compete_home_city_only=True),
+    ).json()
+
+    assert (saved["home_city_id"], saved["compete_home_city_only"]) == (ASTANA, True)
+    assert client.put(
+        "/api/settings", json=settings_payload(home_city_id="Астана")
+    ).status_code == 422
 
 
 def test_paused_rule_keeps_its_last_price_in_the_feed(

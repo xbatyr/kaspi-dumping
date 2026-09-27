@@ -27,6 +27,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from repricer.db.models import PriceHistory, Product, RepricerRule
+from repricer.db.settings_store import settings_or_none
 from repricer.pricing import PricingDecision
 from repricer.uploader.feed_builder import (
     KASPI_TIMEZONE,
@@ -255,9 +256,16 @@ def collect_feed_offers(
 
     Shared by the sync manager, which publishes the feed after a repricing run,
     and by the API endpoint that serves the same feed to Kaspi on demand.
+
+    With "compete only in my city" on, the repriced price goes to the home city
+    alone. Every other city keeps the offer, because a city left out of
+    <cityprices> is a city the product stops being sold in, but at the
+    product's own price instead of whatever the bot last set there.
     """
     loaded = catalog.load(merchant_id)
     prices = current_prices(session, merchant_id)
+    shop = settings_or_none(session)
+    home_city = shop.competing_city_id if shop is not None else None
     offers: list[FeedOffer] = []
     excluded = list(loaded.excluded)
     for item in loaded.items:
@@ -266,6 +274,11 @@ def collect_feed_offers(
             excluded.append(ExcludedOffer(item.sku, "no price for any city"))
             continue
         city_prices = city_prices or {}
+        if home_city is not None and item.base_price is not None:
+            city_prices = {
+                city_id: price if city_id == home_city else item.base_price
+                for city_id, price in city_prices.items()
+            }
         base_price = item.base_price or max(city_prices.values())
         offers.append(
             FeedOffer(

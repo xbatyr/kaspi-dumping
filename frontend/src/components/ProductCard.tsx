@@ -54,7 +54,7 @@ export function ProductCard({ product, rule, cityName, selected, onSelect, onHis
     setCost(product.purchase_price ?? ""); setCategory(product.category ?? "");
     setStocks(product.availabilities); setEditing(!editing);
   }
-  return <article className="product-card rounded-xl border border-slate-200 bg-white p-3 sm:p-4">
+  return <article className={`product-card rounded-xl border p-3 transition-colors sm:p-4 ${selected ? "border-emerald-200 bg-emerald-50" : "border-slate-200 bg-white"}`}>
     <header className="flex items-start gap-3">
       <label className="flex min-h-8 shrink-0 items-center"><input type="checkbox" aria-label={`Выбрать ${product.sku}`} checked={selected} disabled={!rule} onChange={onSelect} className="size-4 accent-emerald-600" /></label>
       <Package aria-hidden="true" className="mt-1 hidden size-6 shrink-0 text-slate-400 sm:block" />
@@ -71,7 +71,7 @@ export function ProductCard({ product, rule, cityName, selected, onSelect, onHis
         <button onClick={onHistory} aria-label={`История цен ${product.sku}`} title="История цен" className="flex size-9 items-center justify-center rounded-md text-slate-500 hover:bg-slate-50"><History className="size-4" /></button>
       </div>
     </header>
-    <dl className="catalog-grid mt-2 rounded-lg bg-[#f7f8f8]">
+    <dl className={`catalog-grid mt-2 rounded-lg ${selected ? "bg-white/70" : "bg-[#f7f8f8]"}`}>
       <Detail label="Город">{cityName}</Detail>
       <Detail label="Место"><span title={`Оценка по загруженным предложениям. Проверка: ${relativeTime(rule?.last_evaluated_at ?? null)}`}>{market?.position ? `${market.position} из ${market.offer_count}` : "—"}</span></Detail>
       <Detail label="Цена 1 места"><span>{tenge(market?.leader_price)}</span>{market?.leader_name ? <span className="mt-1 block break-words text-xs text-[#345c7f]">{market.leader_name}</span> : market?.leader_merchant_id ? <span className="mt-1 block break-all text-xs text-slate-500">ID {market.leader_merchant_id}</span> : null}</Detail>

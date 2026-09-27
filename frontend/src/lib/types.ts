@@ -98,6 +98,11 @@ export interface CatalogFilters {
 
 export interface BulkTools {
   skus?: string[];
+  /** «Для товаров на продаже»: only what Kaspi shows right now. */
+  only_on_sale?: boolean;
+  /** «Применить также для товаров, которые уже имеют минимальную цену». */
+  overwrite_min?: boolean;
+  overwrite_max?: boolean;
   set_min_percent?: string;
   set_max_percent?: string;
   raise_to_max?: boolean;
@@ -117,6 +122,8 @@ export interface RuleList {
   total: number;
   limit: number;
   offset: number;
+  /** Products per sale-filter option, under every other filter. */
+  sale_counts: { all: number; on: number; off: number };
 }
 
 export interface City {
@@ -264,6 +271,8 @@ export interface Settings {
   tax_percent: string;
   commission_percent: string;
   delivery_cost: Money;
+  home_city_id: string;
+  compete_home_city_only: boolean;
 }
 
 export interface SettingsDraft {
@@ -278,6 +287,8 @@ export interface SettingsDraft {
   tax_percent: string;
   commission_percent: string;
   delivery_cost: string;
+  home_city_id: string;
+  compete_home_city_only: boolean;
 }
 
 export interface KaspiCard {

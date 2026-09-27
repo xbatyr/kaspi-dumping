@@ -3,6 +3,8 @@ import { Geist, Geist_Mono } from "next/font/google";
 import Link from "next/link";
 import { Bot, Settings, SlidersHorizontal, Package } from "lucide-react";
 
+import { SetupGuide } from "@/components/SetupGuide";
+
 import "./globals.css";
 
 const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin", "cyrillic"] });
@@ -36,6 +38,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           </div>
         </header>
         <main className="mx-auto max-w-7xl px-4 pt-4 pb-24 sm:px-6 md:py-6">{children}</main>
+        <SetupGuide />
       </body>
     </html>
   );

@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { AlertTriangle, Calculator, CheckCircle2, Loader2, Play, Send, Shield, Store } from "lucide-react";
 
+import { CITY_FALLBACK } from "@/lib/cities";
 import { saveSettings } from "@/lib/client";
 import type { Settings } from "@/lib/types";
 
@@ -23,6 +24,8 @@ export function SettingsForm({ settings }: { settings: Settings }) {
   const [tax, setTax] = useState(String(Number(settings.tax_percent)));
   const [commission, setCommission] = useState(String(Number(settings.commission_percent)));
   const [delivery, setDelivery] = useState(String(Number(settings.delivery_cost)));
+  const [homeCity, setHomeCity] = useState(settings.home_city_id);
+  const [homeCityOnly, setHomeCityOnly] = useState(settings.compete_home_city_only);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -50,6 +53,8 @@ export function SettingsForm({ settings }: { settings: Settings }) {
         tax_percent: tax.replace(",", ".") || "0",
         commission_percent: commission.replace(",", ".") || "0",
         delivery_cost: delivery.replace(",", ".") || "0",
+        home_city_id: homeCity,
+        compete_home_city_only: homeCityOnly,
       });
       setSaved(true);
       router.refresh();
@@ -123,6 +128,36 @@ export function SettingsForm({ settings }: { settings: Settings }) {
             hint="Чем меньше, тем выше риск, что Kaspi ограничит ваш IP."
           />
         </div>
+        <label className="flex cursor-pointer items-center gap-3 rounded-lg border border-slate-200 p-3">
+          <input
+            type="checkbox"
+            checked={homeCityOnly}
+            onChange={(event) => setHomeCityOnly(event.target.checked)}
+            className="size-4 cursor-pointer accent-slate-900"
+          />
+          <span>
+            <span className="block text-sm font-medium text-slate-900">
+              Конкурировать только в своём городе
+            </span>
+            <span className="block text-xs text-slate-500">
+              Бот меняет цену только в выбранном городе, в остальных — ваша базовая цена.
+            </span>
+          </span>
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-slate-600">Свой город</span>
+          <select
+            value={homeCity}
+            onChange={(event) => setHomeCity(event.target.value)}
+            className="min-h-11 w-full cursor-pointer rounded-lg border border-slate-300 bg-white px-3 py-2 text-base outline-none focus:border-slate-900 sm:text-sm"
+          >
+            {Object.entries(CITY_FALLBACK).map(([id, name]) => (
+              <option key={id} value={id}>
+                {name}
+              </option>
+            ))}
+          </select>
+        </label>
       </Card>
 
       <Card

@@ -36,9 +36,10 @@ export default async function DashboardPage({
 }: {
   searchParams: Promise<{
     q?: string; offset?: string; bot?: string; sale?: string; category?: string; sort?: string;
+    tools?: string;
   }>;
 }) {
-  const { q = "", offset = "0", bot = "all", sale = "all", category = "", sort = "sku" } =
+  const { q = "", offset = "0", bot = "all", sale = "all", category = "", sort = "sku", tools } =
     await searchParams;
   const filters: CatalogFilters = { q, bot, sale, category, sort };
   const result = await load(filters, Number(offset) || 0);
@@ -84,6 +85,7 @@ export default async function DashboardPage({
       status={result.status}
       feedUrl={feedUrl()}
       filters={filters}
+      openTools={tools === "1"}
     />
   );
 }
