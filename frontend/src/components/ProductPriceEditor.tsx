@@ -29,14 +29,20 @@ export function ProductPriceEditor({ product }: { product: ProductRules }) {
     if (unit === "tenge" && (!Number.isFinite(Number(minimum)) || Number(minimum) <= 0 || !Number.isFinite(Number(maximum)) || Number(maximum) <= Number(minimum))) {
       setError("Укажите минимальную цену и максимальную цену выше неё"); return;
     }
-    if (unit === "percent" && (!Number.isFinite(Number(minPercent)) || !Number.isFinite(Number(maxPercent)))) {
-      setError("Укажите проценты вниз и вверх от вашей цены"); return;
+    const hasMin = minPercent.trim() !== "", hasMax = maxPercent.trim() !== "";
+    if (unit === "percent" && ((!hasMin && !hasMax)
+        || (hasMin && !Number.isFinite(Number(minPercent))) || (hasMax && !Number.isFinite(Number(maxPercent))))) {
+      setError("Укажите процент вниз, вверх или оба — пустое поле останется как есть"); return;
     }
     setSaving(true); setError(null); setSaved(false);
     try {
       await saveProductLimits(product.sku, unit === "tenge"
         ? { min_price: minimum, max_price: maximum, step: Number(step) }
-        : { min_percent: minPercent, max_percent: maxPercent, step: Number(step) });
+        : {
+            ...(hasMin ? { min_percent: minPercent } : {}),
+            ...(hasMax ? { max_percent: maxPercent } : {}),
+            step: Number(step),
+          });
       setSaved(true);
       router.refresh();
     } catch (failure) {

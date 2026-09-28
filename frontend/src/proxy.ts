@@ -28,8 +28,9 @@ export function proxy(request: NextRequest) {
 
   const header = request.headers.get("authorization") ?? "";
   const [scheme, encoded] = header.split(" ");
-  if (scheme === "Basic" && encoded) {
-    const [user, ...rest] = atob(encoded).split(":");
+  const credentials = scheme === "Basic" && encoded ? decodeBasic(encoded) : null;
+  if (credentials !== null) {
+    const [user, ...rest] = credentials.split(":");
     if (user === USER && rest.join(":") === PASSWORD) {
       return NextResponse.next();
     }
@@ -38,6 +39,20 @@ export function proxy(request: NextRequest) {
     status: 401,
     headers: { "WWW-Authenticate": 'Basic realm="Kaspi Repricer", charset="UTF-8"' },
   });
+}
+
+/**
+ * The browser sends the credentials as UTF-8 (the realm says charset="UTF-8"),
+ * while atob() yields one character per byte: decoding the bytes is what lets a
+ * Cyrillic password match. Garbage in the header is a failed login, not a 500.
+ */
+function decodeBasic(encoded: string): string | null {
+  try {
+    const bytes = Uint8Array.from(atob(encoded), (char) => char.charCodeAt(0));
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return null;
+  }
 }
 
 export const config = {

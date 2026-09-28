@@ -383,6 +383,23 @@ class RepricerRule(TimestampMixin, Base):
             return None
         return PercentLimits(min_percent=self.min_percent, max_percent=self.max_percent)
 
+    def set_limits_in_tenge(
+        self, *, min_price: Decimal | None = None, max_price: Decimal | None = None
+    ) -> None:
+        """Set a limit the merchant typed in tenge.
+
+        A tenge figure that differs from the current one replaces any percentage
+        that side was set with; otherwise the next base price change would put
+        the old percentage back over what the merchant just typed. Re-sending the
+        figure the percentage already produced keeps the percentage.
+        """
+        if min_price is not None and min_price != self.min_price:
+            self.min_price = min_price
+            self.min_percent = None
+        if max_price is not None and max_price != self.max_price:
+            self.max_price = max_price
+            self.max_percent = None
+
     def refresh_limits(self, base_price: Decimal | None) -> bool:
         """Recompute the tenge limits from the percentages; True if they moved."""
         updated = recalculated_limits(

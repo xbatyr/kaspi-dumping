@@ -322,6 +322,68 @@ def test_limits_given_in_tenge_stay_where_they_were_put(
     assert rule["min_percent"] is None
 
 
+def _raise_own_price(client: TestClient, price: str) -> None:
+    client.put(
+        "/api/products/A",
+        json={"sku": "A", "title": "Товар", "kaspi_product_id": "102298404", "base_price": price},
+    )
+
+
+def test_a_floor_retyped_in_tenge_is_not_taken_back_by_the_old_percentage(
+    client: TestClient, session: Session
+) -> None:
+    add_product(session, "A", base_price=100_000)
+    client.put("/api/strategy/products/A/limits", json={"min_percent": "10", "max_percent": "5"})
+    rule_id = client.get("/api/products/A").json()["rules"][0]["id"]
+
+    client.post("/api/rules/bulk-update", json={"rule_ids": [rule_id], "min_price": "80000"})
+    _raise_own_price(client, "120000")
+
+    rule = client.get("/api/products/A").json()["rules"][0]
+    # The floor the merchant typed stays; the ceiling still follows its percentage.
+    assert (rule["min_price"], rule["min_percent"]) == ("80000", None)
+    assert (rule["max_price"], rule["max_percent"]) == ("126000", "5.00")
+
+
+def test_saving_the_shared_strategy_keeps_percent_limits(
+    client: TestClient, session: Session
+) -> None:
+    add_product(session, "A", base_price=100_000)
+    client.put("/api/strategy/products/A/limits", json={"min_percent": "10", "max_percent": "5"})
+
+    client.put("/api/strategy", json={"strategy": "beat_first", "city_ids": [ALMATY]})
+    _raise_own_price(client, "120000")
+
+    rule = client.get("/api/products/A").json()["rules"][0]
+    assert (rule["min_percent"], rule["max_percent"]) == ("10.00", "5.00")
+    assert (rule["min_price"], rule["max_price"]) == ("108000", "126000")
+
+
+def test_a_price_list_without_stock_or_price_columns_erases_nothing(
+    client: TestClient, session: Session
+) -> None:
+    add_product(session, "A", base_price=100_000)
+
+    client.post(
+        "/api/products/import",
+        json={"items": [{"sku": "A", "title": "Товар", "kaspi_product_id": "102298404"}]},
+    )
+
+    product = client.get("/api/products/A").json()
+    assert product["base_price"] == "100000"
+    assert product["brand"] == "Apple"
+    assert [entry["store_id"] for entry in product["availabilities"]] == ["PP1"]
+
+
+def test_an_own_price_with_tiyn_is_refused(client: TestClient, session: Session) -> None:
+    response = client.post(
+        "/api/products",
+        json={"sku": "B", "title": "Товар", "base_price": "100.50"},
+    )
+
+    assert response.status_code == 422
+
+
 def test_one_side_in_percent_and_one_in_tenge(client: TestClient, session: Session) -> None:
     add_product(session, "A", base_price=100_000)
 

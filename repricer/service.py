@@ -154,14 +154,18 @@ class WorkerService:
         stop = stop if stop is not None else threading.Event()
         logger.info("Сервис запущен: настройки читаются из базы, ждём включения в панели")
         while True:
-            config, enabled, strategy_ready = self.read_config()
+            wait = IDLE_SECONDS
             try:
+                # Reading the settings is inside the guard too: a database that is
+                # still starting or blipped must not kill the whole service.
+                config, enabled, strategy_ready = self.read_config()
+                if config and enabled and strategy_ready:
+                    wait = config.interval_seconds
                 self.run_once()
             except Exception:
                 # A cycle can fail on anything: a database blip, a full disk, a
                 # changed Kaspi response. The service sleeps and tries again.
                 logger.exception("Цикл упал")
-            wait = config.interval_seconds if (config and enabled and strategy_ready) else IDLE_SECONDS
             if stop.wait(wait):
                 logger.info("Остановка по сигналу")
                 return

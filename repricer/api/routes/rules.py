@@ -70,8 +70,7 @@ def configure_product_rules(
             session.add(rule)
             by_city[city_id] = rule
         rule.strategy = payload.strategy
-        rule.min_price = payload.min_price
-        rule.max_price = payload.max_price
+        rule.set_limits_in_tenge(min_price=payload.min_price, max_price=payload.max_price)
         rule.step = payload.step
         rule.target_position = payload.target_position
         rule.ignored_merchants = list(payload.ignored_merchants)
@@ -264,8 +263,7 @@ def update_rule(
             f"the fixed_price strategy holds the product's base_price, which {rule.product.sku} does not have",
         )
     rule.strategy = payload.strategy
-    rule.min_price = payload.min_price
-    rule.max_price = payload.max_price
+    rule.set_limits_in_tenge(min_price=payload.min_price, max_price=payload.max_price)
     rule.step = payload.step
     rule.target_position = payload.target_position
     rule.ignored_merchants = list(payload.ignored_merchants)
@@ -348,10 +346,7 @@ def bulk_update(
             rule.strategy = payload.strategy
             if payload.strategy is not PricingStrategy.TARGET_POSITION:
                 rule.target_position = None
-        if payload.min_price is not None:
-            rule.min_price = payload.min_price
-        if payload.max_price is not None:
-            rule.max_price = payload.max_price
+        rule.set_limits_in_tenge(min_price=payload.min_price, max_price=payload.max_price)
         if payload.step is not None:
             rule.step = payload.step
         if payload.target_position is not None and rule.strategy is PricingStrategy.TARGET_POSITION:
@@ -371,7 +366,10 @@ def bulk_update(
             selected = next(rule for rule in rules if rule.product_id == product.id)
             if selected.max_price <= selected.min_price:
                 raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "для демпинга Max должен быть выше Min")
-            _apply(product, global_settings, selected.min_price, selected.max_price, selected.step)
+            # The side left empty keeps its percentage, and the one just typed
+            # in tenge was already cleared of it above.
+            _apply(product, global_settings, selected.min_price, selected.max_price, selected.step,
+                   selected.percent_limits)
             if payload.is_active is False:
                 for rule in product.rules:
                     rule.is_active = False

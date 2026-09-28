@@ -231,8 +231,22 @@ def test_the_floor_never_passes_the_ceiling(session: Session) -> None:
     change = adjust_min_price(session, MERCHANT, product.rules[0].id, 5)
 
     assert change is not None
-    assert change.after == Decimal(500000)  # would have been 519 750
+    # Stays a tenge under the ceiling: Min = Max would leave the shared strategy
+    # no room and it would stop repricing the product.
+    assert change.after == Decimal(499999)  # would have been 519 750
     assert change.clamped
+
+
+def test_a_floor_moved_by_hand_stops_following_a_percentage(session: Session) -> None:
+    product = make_product(session)
+    rule = product.rules[0]
+    rule.min_percent = Decimal(10)
+    session.flush()
+
+    adjust_min_price(session, MERCHANT, rule.id, -5)
+
+    session.expire_all()
+    assert session.scalars(select(RepricerRule)).one().min_percent is None
 
 
 def test_an_unknown_rule_changes_nothing(session: Session) -> None:

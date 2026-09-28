@@ -288,16 +288,21 @@ def test_feed_name_follows_the_template(session: Session, manager_factory: Any) 
         ({"prices": {ALMATY: None}}, "no price for any city"),
     ],
 )
-def test_incomplete_product_blocks_publication(
+def test_unfinished_product_is_left_out_without_freezing_the_shop(
     session: Session, manager_factory: Any, kwargs: dict[str, Any], reason: str
 ) -> None:
     changed = make_product(session, "SKU-1", prices={ALMATY: 362000})
     make_product(session, "SKU-BAD", **kwargs)
     manager, storage = manager_factory()
 
-    with pytest.raises(ValueError, match=reason):
-        manager.sync(session, MERCHANT, [PriceUpdate(rule_of(changed), decision(361999))])
-    assert storage.published == []
+    result = manager.sync(session, MERCHANT, [PriceUpdate(rule_of(changed), decision(361999))])
+
+    # The good product's new price still reaches Kaspi; the unfinished one,
+    # which could never be a valid offer, is reported instead of blocking it.
+    assert result.applied == 1
+    assert [(item.sku, item.reason) for item in result.excluded] == [("SKU-BAD", reason)]
+    feed = ET.fromstring(storage.published[-1][1])
+    assert skus_in(feed) == ["SKU-1"]
 
 
 def test_inactive_product_is_left_out(session: Session, manager_factory: Any) -> None:
@@ -316,7 +321,9 @@ def test_catalogue_with_nothing_publishable_refuses_to_publish(
     product = make_product(session, "SKU-1", stores=False)
     manager, storage = manager_factory()
 
-    with pytest.raises(ValueError, match="no pickup point"):
+    # Leaving unfinished products out must never degrade into an empty feed,
+    # which would take the whole shop off Kaspi.
+    with pytest.raises(ValueError, match="no offers"):
         manager.sync(session, MERCHANT, [PriceUpdate(rule_of(product), decision(361999))])
     assert storage.published == []
 
@@ -324,7 +331,7 @@ def test_catalogue_with_nothing_publishable_refuses_to_publish(
 # --- External catalogue and failures ------------------------------------------
 
 
-def test_external_catalogue_exclusions_block_publication(session: Session, manager_factory: Any) -> None:
+def test_external_catalogue_exclusions_are_left_out(session: Session, manager_factory: Any) -> None:
     product = make_product(session, "SKU-1", brand=None, stores=False)
     external = StaticCatalog(
         Catalog(
@@ -341,9 +348,10 @@ def test_external_catalogue_exclusions_block_publication(session: Session, manag
     )
     manager, storage = manager_factory(catalog=external)
 
-    with pytest.raises(ValueError, match="SKU-9"):
-        manager.sync(session, MERCHANT, [PriceUpdate(rule_of(product), decision(361999))])
-    assert storage.published == []
+    result = manager.sync(session, MERCHANT, [PriceUpdate(rule_of(product), decision(361999))])
+
+    assert [item.sku for item in result.excluded] == ["SKU-9"]
+    assert skus_in(storage.last_feed) == ["SKU-1"]
 
 
 def test_a_failed_upload_leaves_the_old_price_in_the_database(

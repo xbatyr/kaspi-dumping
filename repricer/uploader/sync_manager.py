@@ -19,7 +19,7 @@ from collections import defaultdict
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Protocol
 
 from loguru import logger
@@ -189,9 +189,15 @@ class SyncManager:
         session.flush()
         offers, excluded = self._collect_offers(session, merchant.merchant_id)
         if excluded:
-            raise ValueError(
-                "refusing an incomplete feed: "
-                + ", ".join(f"{item.sku} ({item.reason})" for item in excluded[:10])
+            # A product with no pickup point or no price cannot be an offer at
+            # all; it is one that was added but never finished. Refusing the
+            # whole feed over it would freeze every other price in the shop, so
+            # it is left out and shown on the dashboard as a blocker instead.
+            logger.error(
+                "merchant={}: {} products are not in the feed until fixed: {}",
+                merchant.merchant_id,
+                len(excluded),
+                ", ".join(f"{item.sku} ({item.reason})" for item in excluded[:10]),
             )
         feed = build_feed(merchant, offers, generated_at=self._clock())
         filename = self._filename_template.format(merchant_id=merchant.merchant_id)
@@ -274,12 +280,19 @@ def collect_feed_offers(
             excluded.append(ExcludedOffer(item.sku, "no price for any city"))
             continue
         city_prices = city_prices or {}
-        if home_city is not None and item.base_price is not None:
+        # Kaspi takes whole tenge only, and one fractional own price would make
+        # the whole feed unbuildable, so it is rounded here rather than trusted.
+        own_price = (
+            item.base_price.quantize(Decimal(1), rounding=ROUND_HALF_UP)
+            if item.base_price is not None
+            else None
+        )
+        if home_city is not None and own_price is not None:
             city_prices = {
-                city_id: price if city_id == home_city else item.base_price
+                city_id: price if city_id == home_city else own_price
                 for city_id, price in city_prices.items()
             }
-        base_price = item.base_price or max(city_prices.values())
+        base_price = own_price or max(city_prices.values())
         offers.append(
             FeedOffer(
                 sku=item.sku,

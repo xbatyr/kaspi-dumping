@@ -55,12 +55,31 @@ export function PriceQuickEdit({ product, rule, field }: { product: ProductRules
       return { min_price: minimum, max_price: maximum, step: Number(step) };
     }
     if (anchor === null) return "У товара нет своей цены — задайте границы в тенге";
-    const low = fromPercent(anchor, minPercent, "down");
-    const high = fromPercent(anchor, maxPercent, "up");
+    const hasMin = minPercent.trim() !== "";
+    const hasMax = maxPercent.trim() !== "";
+    if (!hasMin && !hasMax) return "Укажите процент вниз, вверх или оба";
+    const { low, high } = band(anchor);
     if (low === null || high === null) return "Проценты должны быть числами от 0";
-    if (Number(minPercent) > 90 || Number(maxPercent) > 500) return "Слишком большой процент: вниз до 90%, вверх до 500%";
+    if ((hasMin && Number(minPercent) > 90) || (hasMax && Number(maxPercent) > 500)) return "Слишком большой процент: вниз до 90%, вверх до 500%";
     if (high <= low) return "Максимум должен быть выше минимума";
-    return { min_percent: minPercent, max_percent: maxPercent, step: Number(step) };
+    // An empty side is "не менять": the backend keeps what that side had.
+    return {
+      ...(hasMin ? { min_percent: minPercent } : {}),
+      ...(hasMax ? { max_percent: maxPercent } : {}),
+      step: Number(step),
+    };
+  }
+
+  /** The band a save would produce: a side left empty keeps today's figure. */
+  function band(from: number): { low: number | null; high: number | null } {
+    const kept = (value: string | undefined) => {
+      const number = Number(value ?? "");
+      return value && Number.isFinite(number) ? number : null;
+    };
+    return {
+      low: minPercent.trim() ? fromPercent(from, minPercent, "down") : kept(rule?.min_price),
+      high: maxPercent.trim() ? fromPercent(from, maxPercent, "up") : kept(rule?.max_price),
+    };
   }
 
   async function save() {
@@ -77,11 +96,11 @@ export function PriceQuickEdit({ product, rule, field }: { product: ProductRules
     } finally { setSaving(false); }
   }
 
-  const preview = unit === "percent" && anchor !== null
-    ? { low: fromPercent(anchor, minPercent, "down"), high: fromPercent(anchor, maxPercent, "up") }
-    : null;
+  const preview = unit === "percent" && anchor !== null ? band(anchor) : null;
 
-  return <div className="group relative inline-block text-right" onMouseEnter={() => { if (window.matchMedia("(hover: hover) and (pointer: fine)").matches) setOpen(true); }} onMouseLeave={() => { if (!saving && window.matchMedia("(hover: hover) and (pointer: fine)").matches) setOpen(false); }}>
+  // Opens on click only, like the dotted values in AlgaTop: opening on hover
+  // popped an editor over every price the pointer crossed.
+  return <div className="group relative inline-block text-right">
     <button type="button" onClick={() => setOpen(true)} aria-expanded={open} aria-label={`Изменить Min, Max и шаг для ${product.sku}`} className="inline-flex min-h-11 cursor-pointer items-center gap-1 font-medium text-slate-900 hover:text-blue-700 md:min-h-0">
       {tenge(field ? String(rule?.[field] ?? "") || null : rule?.current_price ?? product.base_price)}
       {field !== "step" && rule?.[field === "max_price" ? "max_percent" : "min_percent"] && field
@@ -90,7 +109,7 @@ export function PriceQuickEdit({ product, rule, field }: { product: ProductRules
       <Pencil className="size-3 text-slate-400 group-hover:text-blue-600" />
     </button>
     {open && <>
-      <button type="button" aria-label="Закрыть редактирование цены" onClick={() => setOpen(false)} className="fixed inset-0 z-40 bg-slate-900/40 md:hidden" />
+      <button type="button" aria-label="Закрыть редактирование цены" onClick={() => { if (!saving) setOpen(false); }} className="fixed inset-0 z-40 cursor-default bg-slate-900/40 md:bg-transparent" />
       <div role="dialog" aria-label={`Цены товара ${product.sku}`} className="fixed inset-x-0 bottom-0 z-50 max-h-[90dvh] overflow-y-auto rounded-t-2xl bg-white p-4 pb-[max(1rem,env(safe-area-inset-bottom))] text-left shadow-xl md:absolute md:inset-x-auto md:right-0 md:top-full md:bottom-auto md:w-72 md:overflow-visible md:rounded-xl md:border md:border-slate-200 md:p-3" onClick={(event) => event.stopPropagation()}>
       <p className="mb-3 text-base font-semibold text-slate-900 md:mb-2 md:text-xs">Цены товара · {product.sku}</p>
       <div role="group" aria-label="Единицы границ" className="mb-3 flex rounded-lg border border-slate-200 p-0.5 text-xs md:mb-2">

@@ -534,6 +534,10 @@ class ProductIn(BaseModel):
 
     @model_validator(mode="after")
     def check_card_for_repricing(self) -> Self:
+        # Kaspi takes whole tenge; a price with tiyn would be rounded behind the
+        # merchant's back in the feed.
+        if self.base_price is not None and self.base_price != self.base_price.to_integral_value():
+            raise ValueError("цена товара — целое число тенге, без тиынов")
         if not self.kaspi_product_id and any(
             rule.strategy not in {PricingStrategy.MANUAL, PricingStrategy.FIXED_PRICE}
             for rule in self.rules

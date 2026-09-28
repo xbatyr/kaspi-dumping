@@ -279,6 +279,13 @@ class RepricingWorker:
 
         snapshots: list[RuleSnapshot] = []
         home_city = shop.competing_city_id if shop is not None else None
+        if home_city is not None and rows and not any(rule.city_id == home_city for rule, _ in rows):
+            # Otherwise the bot would look busy and quietly price nothing.
+            logger.warning(
+                "«Только свой город» включено, но в городе {} нет ни одного правила: "
+                "добавьте его в города общей стратегии",
+                home_city,
+            )
         for rule, product in rows:
             if home_city is not None and rule.city_id != home_city:
                 # The feed sells this city at the product's own price.

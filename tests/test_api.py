@@ -693,14 +693,20 @@ def test_feed_etag_changes_when_a_price_does(session: Session, client: TestClien
     assert client.get("/feed/kaspi.xml").headers["etag"] != etag
 
 
-def test_feed_refuses_partial_catalogue(session: Session, client: TestClient) -> None:
+def test_feed_leaves_unfinished_products_out(session: Session, client: TestClient) -> None:
     make_product(session, "GOOD", cities={ALMATY: 362000})
     make_product(session, "NO-BRAND", brand=None, cities={ALMATY: 1000})
     make_product(session, "NO-STORE", stores=False, cities={ALMATY: 1000})
     make_product(session, "NO-PRICE", cities={ALMATY: None})
     make_product(session, "INACTIVE", active=False, cities={ALMATY: 1000})
 
-    assert client.get("/feed/kaspi.xml").status_code == 503
+    response = client.get("/feed/kaspi.xml")
+
+    # One product without a pickup point or a price must not take the whole
+    # price list down with it; the dashboard shows it as a blocker instead.
+    assert response.status_code == 200
+    root = ET.fromstring(response.content)
+    assert sorted(offer.get("sku") for offer in root.iter(f"{NS}offer")) == ["GOOD", "NO-BRAND"]
 
 
 def test_feed_refuses_to_serve_an_empty_catalogue(session: Session, client: TestClient) -> None:
@@ -710,7 +716,7 @@ def test_feed_refuses_to_serve_an_empty_catalogue(session: Session, client: Test
 
     # An empty feed would take the whole shop off Kaspi, so it is never served.
     assert response.status_code == 503
-    assert "прайс неполный" in response.json()["detail"]
+    assert "пустой прайс" in response.json()["detail"]
 
 
 # --- Documentation ------------------------------------------------------------

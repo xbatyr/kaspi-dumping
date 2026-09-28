@@ -34,14 +34,11 @@ router = APIRouter(tags=["feed"])
     },
 )
 def kaspi_feed(request: Request, session: SessionDep, merchant: MerchantDep) -> Response:
+    # Unfinished products (no pickup point, no price) are left out rather than
+    # failing the whole feed; the dashboard lists them as blockers.
     offers, excluded = collect_feed_offers(
         session, merchant.merchant_id, catalog=DatabaseCatalog(session)
     )
-    if excluded:
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            "прайс неполный: проверьте товары, которые не попадают в выгрузку",
-        )
     if not offers:
         logger.error(
             "merchant={}: feed requested but nothing is publishable ({} products left out)",
@@ -50,7 +47,7 @@ def kaspi_feed(request: Request, session: SessionDep, merchant: MerchantDep) -> 
         )
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE,
-            "no publishable offers: an empty feed would take the whole shop off Kaspi",
+            "нет ни одного товара для выгрузки: пустой прайс снял бы весь магазин с продажи",
         )
 
     # The ETag covers the offers, not the rendered document, whose date attribute
