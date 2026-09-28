@@ -99,12 +99,12 @@ export function SetupGuide() {
     setActive(null);
   }
 
-  return <aside aria-label="Настройки Kaspi-Бот" className="fixed right-4 bottom-20 z-30 w-[min(20rem,calc(100vw-2rem))] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_12px_40px_-12px_rgba(15,23,42,0.35)] md:bottom-6">
+  return <aside aria-label="Обучение Kaspi-Бот" className={`fixed right-4 bottom-20 z-30 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_12px_40px_-12px_rgba(15,23,42,0.35)] md:bottom-6 ${state.collapsed ? "w-auto" : "w-[min(20rem,calc(100vw-2rem))]"}`}>
     <div className="bg-slate-50 px-4 pt-3 pb-3">
       <div className="flex items-start justify-between gap-2">
         <button type="button" aria-expanded={!state.collapsed} onClick={() => update({ collapsed: !state.collapsed })}
           className="flex min-h-8 items-center gap-1 text-left text-base font-semibold text-slate-900">
-          Настройки Kaspi-Бот {state.collapsed ? <ChevronUp className="size-4" /> : <ChevronDown className="size-4" />}
+          {state.collapsed ? "Обучение" : "Настройки Kaspi-Бот"} {state.collapsed ? <ChevronUp className="size-4" /> : <ChevronDown className="size-4" />}
         </button>
         <button type="button" aria-label="Скрыть обучение" onClick={() => update({ dismissed: true })}
           className="flex size-8 shrink-0 items-center justify-center rounded-md text-slate-400 hover:bg-slate-200/60"><X className="size-4" /></button>

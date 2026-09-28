@@ -179,10 +179,12 @@ export function ProductsTable({ data, cities, categories, filters, status, feedU
   return (
     <div className="space-y-4">
       {!status.worker_enabled && (
-        <div role="status" className="flex flex-wrap items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
-          <AlertTriangle className="size-5 shrink-0 text-amber-700" />
-          <p className="min-w-0 flex-1"><strong>Автоматический демпинг выключен.</strong> Настроенные правила сохранены, но цены сейчас не пересчитываются.</p>
-          <Link href="/settings" className="font-semibold text-amber-900 underline underline-offset-2 hover:text-amber-700">Открыть настройки</Link>
+        <div role="status" className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+          <AlertTriangle className="mt-0.5 size-5 shrink-0 text-amber-700" />
+          <div className="min-w-0">
+            <p><strong>Автоматический демпинг выключен.</strong> Настроенные правила сохранены, но цены сейчас не пересчитываются.</p>
+            <Link href="/settings" className="mt-1 inline-block font-semibold text-amber-900 underline underline-offset-2 hover:text-amber-700">Открыть настройки</Link>
+          </div>
         </div>
       )}
       <details className="rounded-xl border border-slate-200 bg-white px-4 py-3">
