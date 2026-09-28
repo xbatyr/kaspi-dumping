@@ -1,4 +1,4 @@
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
 
 import { createSession, safeDestination, sameOrigin, SESSION_COOKIE, SESSION_SECONDS } from "@/lib/session";
@@ -6,9 +6,9 @@ import { createSession, safeDestination, sameOrigin, SESSION_COOKIE, SESSION_SEC
 const attempts = new Map<string, { count: number; until: number }>();
 
 function equal(left: string, right: string): boolean {
-  const a = Buffer.from(left);
-  const b = Buffer.from(right);
-  return a.length === b.length && timingSafeEqual(a, b);
+  const a = createHash("sha256").update(left).digest();
+  const b = createHash("sha256").update(right).digest();
+  return timingSafeEqual(a, b);
 }
 
 export async function POST(request: NextRequest) {
@@ -19,6 +19,10 @@ export async function POST(request: NextRequest) {
   const destination = safeDestination(String(form.get("next") ?? "/"));
   const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
   const now = Date.now();
+  if (attempts.size >= 1000) {
+    for (const [key, value] of attempts) if (value.until <= now) attempts.delete(key);
+    if (attempts.size >= 1000) attempts.delete(attempts.keys().next().value!);
+  }
   const current = attempts.get(ip);
   if (current && current.until > now && current.count >= 8) {
     return new Response("Слишком много попыток. Повторите через 15 минут.", { status: 429 });

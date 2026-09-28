@@ -1,5 +1,5 @@
 import type { NextRequest } from "next/server";
-import { sameOrigin } from "@/lib/session";
+import { sameOrigin, SESSION_COOKIE, validSession } from "@/lib/session";
 
 /**
  * Forwards /api/* to FastAPI.
@@ -18,6 +18,9 @@ const API_URL = process.env.API_URL ?? "http://127.0.0.1:8000";
 const API_KEY = process.env.REPRICER_API_KEY ?? "";
 
 async function proxy(request: NextRequest, path: string[]): Promise<Response> {
+  if (!await validSession(request.cookies.get(SESSION_COOKIE)?.value)) {
+    return Response.json({ detail: "Требуется вход" }, { status: 401 });
+  }
   if (request.method !== "GET" && request.method !== "HEAD" && !sameOrigin(request)) {
     return Response.json({ detail: "Недопустимый источник" }, { status: 403 });
   }
