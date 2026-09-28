@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   AlertTriangle,
@@ -175,8 +176,15 @@ export function ProductsTable({ data, cities, categories, filters, status, feedU
 
   return (
     <div className="space-y-4">
+      {!status.worker_enabled && (
+        <div role="status" className="flex flex-wrap items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+          <AlertTriangle className="size-5 shrink-0 text-amber-700" />
+          <p className="min-w-0 flex-1"><strong>Автоматический демпинг выключен.</strong> Настроенные правила сохранены, но цены сейчас не пересчитываются.</p>
+          <Link href="/settings" className="font-semibold text-amber-900 underline underline-offset-2 hover:text-amber-700">Открыть настройки</Link>
+        </div>
+      )}
       <details className="rounded-xl border border-slate-200 bg-white px-4 py-3">
-        <summary className="cursor-pointer text-sm text-slate-600">Товаров: <b>{status.products_total}</b> · Правил в работе: <b>{status.rules_active}</b> · {status.feed_ready ? "XML готов" : "XML требует внимания"}<span className="ml-2 text-xs text-[#345c7f]">Состояние магазина и ссылка XML</span></summary>
+        <summary className="cursor-pointer text-sm text-slate-600">Товаров: <b>{status.products_total}</b> · {status.worker_enabled ? "Правил в работе" : "Настроено правил"}: <b>{status.rules_active}</b> · {status.feed_ready ? "XML готов" : "XML требует внимания"}<span className="ml-2 text-xs text-[#345c7f]">Состояние магазина и ссылка XML</span></summary>
         <div className="mt-3"><StatusPanel status={status} feedUrl={feedUrl} /></div>
       </details>
 
