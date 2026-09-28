@@ -4,10 +4,17 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   AlertTriangle,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Download,
+  Layers,
+  Loader2,
   Package,
   PackagePlus,
   Search,
   SlidersHorizontal,
+  X,
 } from "lucide-react";
 
 import { ProductCard } from "@/components/ProductCard";
@@ -15,7 +22,7 @@ import { AddProductDialog } from "@/components/AddProductDialog";
 import { BulkToolsDialog } from "@/components/BulkToolsDialog";
 import { HistoryDialog } from "@/components/HistoryDialog";
 import { StatusPanel } from "@/components/StatusPanel";
-import { linkKaspiCard } from "@/lib/client";
+import { linkKaspiCard, setOnSale } from "@/lib/client";
 import type { CatalogFilters, Category, City, ProductRules, Rule, RuleList, Status } from "@/lib/types";
 
 const DEFAULT_CITY = "750000000";
@@ -27,9 +34,47 @@ interface Props {
   filters: CatalogFilters;
   status: Status;
   feedUrl: string;
+  /** Open «Массовые настройки» right away: the setup tour links here. */
+  openTools?: boolean;
 }
 
-export function ProductsTable({ data, cities, categories, filters, status, feedUrl }: Props) {
+/** "3 товара", "5 товаров": the selection bar speaks Russian. */
+function products(count: number): string {
+  const tens = count % 100, ones = count % 10;
+  if (tens >= 11 && tens <= 14) return `${count} товаров`;
+  if (ones === 1) return `${count} товар`;
+  if (ones >= 2 && ones <= 4) return `${count} товара`;
+  return `${count} товаров`;
+}
+
+/** 1 2 3 … 12: the first and last page always, and a window around the current one. */
+function pageNumbers(current: number, last: number): (number | "gap")[] {
+  if (last <= 10) return Array.from({ length: last }, (_, index) => index + 1);
+  const start = Math.max(1, Math.min(current - 4, last - 8));
+  const end = Math.min(last, start + 8);
+  const pages: (number | "gap")[] = [];
+  if (start > 1) pages.push(1, ...(start > 2 ? ["gap" as const] : []));
+  for (let page = start; page <= end; page += 1) pages.push(page);
+  if (end < last) pages.push(...(end < last - 1 ? ["gap" as const] : []), last);
+  return pages;
+}
+
+function Pagination({ data, onPage }: { data: RuleList; onPage: (offset: number) => void }) {
+  const last = Math.ceil(data.total / data.limit);
+  if (last <= 1) return null;
+  const current = Math.floor(data.offset / data.limit) + 1;
+  const box = "flex min-h-10 min-w-10 items-center justify-center rounded-md border px-2 text-sm tabular";
+  return <nav aria-label="Страницы" className="flex flex-wrap items-center justify-end gap-1.5">
+    <button type="button" aria-label="Предыдущая страница" disabled={current === 1} onClick={() => onPage(data.offset - data.limit)} className={`${box} border-slate-200 bg-white text-slate-600 disabled:opacity-40`}><ChevronLeft className="size-4" /></button>
+    {pageNumbers(current, last).map((page, index) => page === "gap"
+      ? <span key={`gap-${index}`} className="px-1 text-slate-400">…</span>
+      : <button key={page} type="button" aria-current={page === current ? "page" : undefined} onClick={() => onPage((page - 1) * data.limit)}
+          className={`${box} ${page === current ? "border-[#345c7f] bg-[#eef3f8] font-semibold text-[#345c7f]" : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"}`}>{page}</button>)}
+    <button type="button" aria-label="Следующая страница" disabled={current === last} onClick={() => onPage(data.offset + data.limit)} className={`${box} border-slate-200 bg-white text-slate-600 disabled:opacity-40`}><ChevronRight className="size-4" /></button>
+  </nav>;
+}
+
+export function ProductsTable({ data, cities, categories, filters, status, feedUrl, openTools = false }: Props) {
   const router = useRouter();
   const { q: search, bot, sale, category, sort } = filters;
 
@@ -55,7 +100,9 @@ export function ProductsTable({ data, cities, categories, filters, status, feedU
     return mostUsed ?? (cities.some((item) => item.id === DEFAULT_CITY) ? DEFAULT_CITY : (cities[0]?.id ?? ""));
   });
   const [adding, setAdding] = useState(false);
-  const [tools, setTools] = useState(false);
+  const [tools, setTools] = useState(openTools);
+  const [menu, setMenu] = useState(false);
+  const [saleBusy, setSaleBusy] = useState(false);
   const [historyOf, setHistoryOf] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<number>>(() => new Set());
   const [notice, setNotice] = useState<string | null>(null);
@@ -93,6 +140,21 @@ export function ProductsTable({ data, cities, categories, filters, status, feedU
   }
 
 
+  const selectedProducts = data.items.filter(product => product.rules.some(rule => selected.has(rule.id)));
+  const allSelectedOffSale = selectedProducts.length > 0 && selectedProducts.every(product => !product.is_active);
+
+  async function toggleSale() {
+    setSaleBusy(true); setError(null);
+    try {
+      const updated = await setOnSale(selectedProducts.map(product => product.sku), allSelectedOffSale);
+      setNotice(allSelectedOffSale ? `В продажу возвращено: ${products(updated)}.` : `Снято с продажи: ${products(updated)}. Они уйдут из следующего XML.`);
+      setSelected(new Set());
+      router.refresh();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "Не удалось изменить продажу");
+    } finally { setSaleBusy(false); }
+  }
+
   async function linkCard(product: ProductRules) {
     const value = window.prompt(`ID карточки Kaspi для ${product.sku} (цифры в конце ссылки):`);
     if (value === null) return;
@@ -118,45 +180,14 @@ export function ProductsTable({ data, cities, categories, filters, status, feedU
         <div className="mt-3"><StatusPanel status={status} feedUrl={feedUrl} /></div>
       </details>
 
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <form className="relative flex-1 sm:max-w-xs" action="/">
-          <input type="hidden" name="bot" value={bot} /><input type="hidden" name="sale" value={sale} />
-          <input type="hidden" name="category" value={category} /><input type="hidden" name="sort" value={sort} />
-          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
-          <input
-            type="search"
-            name="q"
-            defaultValue={search}
-            placeholder="Поиск по названию или SKU"
-            className="min-h-11 w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3 text-base outline-none focus:border-slate-400 sm:text-sm"
-          />
-        </form>
-
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-        {selectedRuleIds.length > 0 && (
-          <button
-            type="button"
-            onClick={() => router.push(`/strategies?bulk=${selectedRuleIds.join(",")}`)}
-            className="min-h-11 cursor-pointer rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50"
-          >
-            Массовые настройки ({selectedRuleIds.length})
-          </button>
-        )}
-        <button
-          type="button"
-          onClick={() => setAdding(true)}
-          className="inline-flex min-h-11 cursor-pointer items-center justify-center gap-1.5 rounded-lg bg-emerald-700 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-800"
-        >
-          <PackagePlus className="size-4" />
-          Добавить товары
-        </button>
-        <button type="button" onClick={() => setTools(true)} className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 hover:border-slate-300 hover:bg-slate-50"><SlidersHorizontal className="size-4" />Инструменты</button>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-2xl font-semibold text-slate-900">Товары <span className="tabular">({data.total})</span></h2>
         <label className="flex min-w-0 items-center gap-2 text-sm text-slate-600">
           Город
           <select
             value={city}
             onChange={(event) => { setCity(event.target.value); setSelected(new Set()); }}
-            className="min-h-11 min-w-0 flex-1 cursor-pointer rounded-lg border border-slate-200 bg-white px-3 py-2 text-base outline-none focus:border-slate-400 sm:flex-none sm:text-sm"
+            className="min-h-11 min-w-0 cursor-pointer rounded-lg border border-slate-200 bg-white px-3 py-2 text-base outline-none focus:border-slate-400 sm:text-sm"
           >
             {cities.map((item) => (
               <option key={item.id} value={item.id}>
@@ -165,20 +196,60 @@ export function ProductsTable({ data, cities, categories, filters, status, feedU
             ))}
           </select>
         </label>
-        </div>
       </div>
 
-      <details key={`${sale}:${category}:${bot}:${sort}`} className="rounded-xl border border-slate-200 bg-white px-4 py-3" open={sale !== "all" || category !== "" || bot !== "all" || sort !== "sku"}>
-        <summary className="cursor-pointer text-sm font-medium text-slate-700">Фильтры и сортировка{(sale !== "all" || category !== "" || bot !== "all" || sort !== "sku") && <span className="ml-2 rounded-full bg-emerald-50 px-2 py-0.5 text-xs text-emerald-800">Применены</span>}</summary>
-      <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <label className="min-w-0 text-xs text-slate-600">Продажа
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-[auto_auto_minmax(0,1.6fr)_repeat(4,minmax(0,1fr))] lg:items-end">
+        <button type="button" onClick={() => setTools(true)}
+          className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700">
+          <Layers className="size-4" />Массовые настройки
+        </button>
+        <div className="relative">
+          <button type="button" aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(!menu)}
+            className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg bg-[#345c7f] px-4 text-sm font-medium text-white hover:bg-[#2b4d6b]">
+            <SlidersHorizontal className="size-4" />Инструменты<ChevronDown className="size-4" />
+          </button>
+          {menu && <button type="button" aria-hidden="true" tabIndex={-1} onClick={() => setMenu(false)} className="fixed inset-0 z-20 cursor-default" />}
+          {menu && <div role="menu" className="absolute left-0 z-30 mt-1 w-64 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-lg">
+            <button role="menuitem" type="button" onClick={() => { setMenu(false); setTools(true); }} className="flex min-h-11 w-full items-center gap-2 px-3 text-left text-sm hover:bg-slate-50"><SlidersHorizontal className="size-4 text-slate-400" />Массовые настройки</button>
+            <button role="menuitem" type="button" onClick={() => { setMenu(false); setAdding(true); }} className="flex min-h-11 w-full items-center gap-2 px-3 text-left text-sm hover:bg-slate-50"><PackagePlus className="size-4 text-slate-400" />Добавить товары</button>
+            <a role="menuitem" href={feedUrl} download="kaspi.xml" onClick={() => setMenu(false)} className="flex min-h-11 w-full items-center gap-2 px-3 text-sm text-slate-800 hover:bg-slate-50"><Download className="size-4 text-slate-400" />Скачать XML</a>
+          </div>}
+        </div>
+        <form className="flex min-w-0" action="/">
+          <input type="hidden" name="bot" value={bot} /><input type="hidden" name="sale" value={sale} />
+          <input type="hidden" name="category" value={category} /><input type="hidden" name="sort" value={sort} />
+          <label className="relative min-w-0 flex-1">
+            <span className="sr-only">Поиск по артикулу или названию</span>
+            <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
+            <input
+              type="search"
+              name="q"
+              defaultValue={search}
+              placeholder="Поиск по артикулу, названию"
+              className="min-h-11 w-full rounded-l-lg border border-slate-300 bg-white py-2 pl-9 pr-3 text-base outline-none focus:border-slate-500 sm:text-sm"
+            />
+          </label>
+          <button className="min-h-11 shrink-0 rounded-r-lg bg-[#345c7f] px-4 text-sm font-medium text-white hover:bg-[#2b4d6b]">Поиск</button>
+        </form>
+        <label className="min-w-0 text-xs text-slate-600">Фильтры
           <select className="catalog-input mt-1" value={sale} onChange={event => go({ sale: event.target.value })}>
-            <option value="all">Все товары</option>
-            <option value="on">На продаже</option>
-            <option value="off">Сняты с продажи</option>
+            <option value="all">Все товары ({data.sale_counts.all})</option>
+            <option value="on">На продаже ({data.sale_counts.on})</option>
+            <option value="off">Сняты с продажи ({data.sale_counts.off})</option>
           </select>
         </label>
-        <label className="min-w-0 text-xs text-slate-600">Категория
+        <label className="min-w-0 text-xs text-slate-600">Сортировать по
+          <select className="catalog-input mt-1" value={sort} onChange={event => go({ sort: event.target.value })}>
+            <option value="sku">По умолчанию</option>
+            <option value="title">По названию</option>
+            <option value="price_asc">Цена: сначала дешёвые</option>
+            <option value="price_desc">Цена: сначала дорогие</option>
+            <option value="margin_asc">Маржа: сначала худшая</option>
+            <option value="margin_desc">Маржа: сначала лучшая</option>
+            <option value="updated">Недавно изменённые</option>
+          </select>
+        </label>
+        <label className="min-w-0 text-xs text-slate-600">Категории
           <select className="catalog-input mt-1" value={category} onChange={event => go({ category: event.target.value })}>
             <option value="">Все категории</option>
             {categories.map(item => <option key={item.name ?? "__none__"} value={item.name ?? "__none__"}>{(item.name ?? "Без категории")} ({item.products})</option>)}
@@ -192,20 +263,8 @@ export function ProductsTable({ data, cities, categories, filters, status, feedU
             <option value="unlinked">Без карточки Kaspi</option>
           </select>
         </label>
-        <label className="min-w-0 text-xs text-slate-600">Сортировка
-          <select className="catalog-input mt-1" value={sort} onChange={event => go({ sort: event.target.value })}>
-            <option value="sku">По артикулу</option>
-            <option value="title">По названию</option>
-            <option value="price_asc">Цена: сначала дешёвые</option>
-            <option value="price_desc">Цена: сначала дорогие</option>
-            <option value="margin_asc">Маржа: сначала худшая</option>
-            <option value="margin_desc">Маржа: сначала лучшая</option>
-            <option value="updated">Недавно изменённые</option>
-          </select>
-        </label>
       </div>
-      <a href={feedUrl} download="kaspi.xml" className="mt-3 inline-flex min-h-11 items-center rounded-lg border border-slate-200 px-4 text-sm text-[#345c7f]">Скачать XML</a>
-      </details>
+      <Pagination data={data} onPage={offset => go({ offset })} />
       <datalist id="product-categories">{categories.map(item => item.name && <option key={item.name} value={item.name} />)}</datalist>
 
       {error && (
@@ -223,7 +282,7 @@ export function ProductsTable({ data, cities, categories, filters, status, feedU
           <p className="mt-1 text-sm text-slate-500">
             {search
               ? "Поиск ничего не нашёл — попробуйте другой запрос."
-              : "Нажмите «Добавить товары» — по одному или списком из таблицы."}
+              : "Откройте «Инструменты» → «Добавить товары» — по одному или списком из таблицы."}
           </p>
         </div>
       ) : (
@@ -248,36 +307,25 @@ export function ProductsTable({ data, cities, categories, filters, status, feedU
         </>
       )}
 
-      {data.total > data.limit && (
-        <div className="flex items-center justify-between text-sm text-slate-600">
-          <span className="tabular">
-            {data.offset + 1}–{Math.min(data.offset + data.limit, data.total)} из {data.total}
-          </span>
-          <span className="flex gap-2">
-            <button
-              type="button"
-              disabled={data.offset === 0}
-              onClick={() => go({ offset: data.offset - data.limit })}
-              className="min-h-11 cursor-pointer rounded-lg border border-slate-200 bg-white px-3 py-1.5 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              Назад
-            </button>
-            <button
-              type="button"
-              disabled={data.offset + data.limit >= data.total}
-              onClick={() => go({ offset: data.offset + data.limit })}
-              className="min-h-11 cursor-pointer rounded-lg border border-slate-200 bg-white px-3 py-1.5 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              Вперёд
-            </button>
-          </span>
+      <Pagination data={data} onPage={offset => go({ offset })} />
+
+      {selectedProducts.length > 0 && (
+        <div role="region" aria-label="Выбранные товары" className="fixed inset-x-4 bottom-20 z-40 mx-auto flex max-w-xl flex-wrap items-center justify-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-[0_8px_30px_-8px_rgba(15,23,42,0.35)] md:bottom-6">
+          <span className="text-sm text-slate-700">Выбрано {products(selectedProducts.length)}</span>
+          <button type="button" disabled={saleBusy} onClick={() => void toggleSale()}
+            className="inline-flex min-h-10 items-center gap-2 rounded-lg bg-[#345c7f] px-4 text-sm font-medium text-white hover:bg-[#2b4d6b] disabled:opacity-60">
+            {saleBusy && <Loader2 className="size-4 animate-spin" />}{allSelectedOffSale ? "Вернуть в продажу" : "Снять с продажи"}
+          </button>
+          <button type="button" onClick={() => setTools(true)} className="min-h-10 rounded-lg border border-slate-300 px-3 text-sm font-medium text-slate-800 hover:bg-slate-50">Массовые настройки</button>
+          <button type="button" aria-label="Снять выделение" onClick={() => setSelected(new Set())} className="flex size-9 items-center justify-center rounded-full border border-slate-300 text-slate-500 hover:bg-slate-50"><X className="size-4" /></button>
         </div>
       )}
 
       {adding && <AddProductDialog cities={cities} onClose={() => setAdding(false)} />}
 
       {tools && <BulkToolsDialog
-        skus={data.items.filter(product => product.rules.some(rule => selected.has(rule.id))).map(product => product.sku)}
+        skus={selectedProducts.map(product => product.sku)}
+        categories={categories}
         onClose={() => setTools(false)} />}
 
       {historyOf && (

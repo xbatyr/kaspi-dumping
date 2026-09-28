@@ -21,7 +21,7 @@ export function MarginDialog({ product, onClose }: { product: ProductRules; onCl
   const [cost, setCost] = useState(product.purchase_price ?? "");
   const [commission, setCommission] = useState(product.commission_percent ?? "");
   const [delivery, setDelivery] = useState(product.delivery_cost ?? "");
-  const [result, setResult] = useState<Margin | null>(null);
+  const [breakdown, setBreakdown] = useState<Margin | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -31,16 +31,16 @@ export function MarginDialog({ product, onClose }: { product: ProductRules; onCl
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [onClose]);
 
+  // An unusable price hides the old breakdown at render time instead of
+  // clearing it from inside the effect.
+  const validPrice = Number.isFinite(Number(price)) && Number(price) > 0;
+
   useEffect(() => {
+    if (!validPrice) return;
     const timer = setTimeout(async () => {
-      if (!Number.isFinite(Number(price)) || Number(price) <= 0) {
-        setResult(null);
-        setBusy(false);
-        return;
-      }
       setBusy(true);
       try {
-        setResult(await previewMargin({
+        setBreakdown(await previewMargin({
           price: String(price),
           sku: product.sku,
           ...(cost === "" ? {} : { purchase_price: String(cost) }),
@@ -53,8 +53,9 @@ export function MarginDialog({ product, onClose }: { product: ProductRules; onCl
       } finally { setBusy(false); }
     }, 300);
     return () => clearTimeout(timer);
-  }, [price, cost, commission, delivery, product.sku]);
+  }, [validPrice, price, cost, commission, delivery, product.sku]);
 
+  const result = validPrice ? breakdown : null;
   const loss = result !== null && Number(result.profit) < 0;
 
   return <div role="dialog" aria-modal="true" aria-label={`Маржинальность ${product.sku}`} className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/50 sm:items-center sm:p-4">

@@ -40,6 +40,8 @@ def update_settings(payload: SettingsIn, session: SessionDep) -> SettingsOut:
     settings.tax_percent = payload.tax_percent
     settings.commission_percent = payload.commission_percent
     settings.delivery_cost = payload.delivery_cost
+    settings.home_city_id = payload.home_city_id
+    settings.compete_home_city_only = payload.compete_home_city_only
     session.commit()
     session.refresh(settings)
     logger.info(
@@ -69,4 +71,6 @@ def _out(settings: ShopSettings) -> SettingsOut:
         tax_percent=settings.tax_percent,
         commission_percent=settings.commission_percent,
         delivery_cost=settings.delivery_cost,
+        home_city_id=settings.home_city_id,
+        compete_home_city_only=settings.compete_home_city_only,
     )

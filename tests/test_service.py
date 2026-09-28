@@ -264,6 +264,22 @@ def test_a_failing_cycle_does_not_end_the_loop(
     assert len(waits) == 2
 
 
+def test_a_database_blip_while_reading_settings_does_not_end_the_loop(
+    session: Session, session_factory: Any, tmp_path: Path
+) -> None:
+    service, _, _ = service_with_fake(session_factory, tmp_path)
+    waits: list[float] = []
+
+    def unreachable() -> Any:
+        raise OSError("database is starting up")
+
+    service.read_config = unreachable  # type: ignore[method-assign]
+    service.run_forever(_StopAfter(waits, times=2))  # type: ignore[arg-type]
+
+    # It keeps coming back instead of the process dying on the first blip.
+    assert waits == [IDLE_SECONDS, IDLE_SECONDS]
+
+
 class _StopAfter:
     """A stop event that lets the loop run a fixed number of times."""
 

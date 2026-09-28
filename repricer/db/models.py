@@ -25,6 +25,7 @@ from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.ext.mutable import MutableList
 from sqlalchemy.orm import Mapped, WriteOnlyMapped, mapped_column, relationship
 
+from repricer.cities import DEFAULT_CITY_ID
 from repricer.db.base import Base
 from repricer.pricing import (
     DEFAULT_TAX_PERCENT,
@@ -205,6 +206,12 @@ class ShopSettings(TimestampMixin, Base):
     global_city_ids: Mapped[list[str]] = mapped_column(
         MutableList.as_mutable(ARRAY(String(16))), server_default=text("'{}'")
     )
+    #: The city the shop sells from, where its price war is actually fought.
+    home_city_id: Mapped[str] = mapped_column(String(16), server_default=DEFAULT_CITY_ID)
+    #: "Конкурировать только в своём городе": the worker reprices home_city_id
+    #: alone, and the feed sells every other city at the product's own price, so
+    #: a price cut at home never spreads to cities the shop hardly ships to.
+    compete_home_city_only: Mapped[bool] = mapped_column(server_default=false())
     # Defaults of the margin calculator. A product may override the last two.
     #: Retail tax on turnover; 3% in Kazakhstan.
     tax_percent: Mapped[Decimal] = mapped_column(server_default=text("3"))
@@ -227,6 +234,8 @@ class ShopSettings(TimestampMixin, Base):
         kwargs.setdefault("global_step", 1)
         kwargs.setdefault("global_ignored_merchants", [])
         kwargs.setdefault("global_city_ids", [])
+        kwargs.setdefault("home_city_id", DEFAULT_CITY_ID)
+        kwargs.setdefault("compete_home_city_only", False)
         kwargs.setdefault("tax_percent", DEFAULT_TAX_PERCENT)
         kwargs.setdefault("commission_percent", Decimal(0))
         kwargs.setdefault("delivery_cost", Decimal(0))
@@ -252,6 +261,11 @@ class ShopSettings(TimestampMixin, Base):
                 product.delivery_cost if product.delivery_cost is not None else self.delivery_cost
             ),
         )
+
+    @property
+    def competing_city_id(self) -> str | None:
+        """The only city repriced, or None when every city is."""
+        return self.home_city_id if self.compete_home_city_only else None
 
     @property
     def is_ready(self) -> bool:
@@ -370,6 +384,23 @@ class RepricerRule(TimestampMixin, Base):
         if self.min_percent is None and self.max_percent is None:
             return None
         return PercentLimits(min_percent=self.min_percent, max_percent=self.max_percent)
+
+    def set_limits_in_tenge(
+        self, *, min_price: Decimal | None = None, max_price: Decimal | None = None
+    ) -> None:
+        """Set a limit the merchant typed in tenge.
+
+        A tenge figure that differs from the current one replaces any percentage
+        that side was set with; otherwise the next base price change would put
+        the old percentage back over what the merchant just typed. Re-sending the
+        figure the percentage already produced keeps the percentage.
+        """
+        if min_price is not None and min_price != self.min_price:
+            self.min_price = min_price
+            self.min_percent = None
+        if max_price is not None and max_price != self.max_price:
+            self.max_price = max_price
+            self.max_percent = None
 
     def refresh_limits(self, base_price: Decimal | None) -> bool:
         """Recompute the tenge limits from the percentages; True if they moved."""

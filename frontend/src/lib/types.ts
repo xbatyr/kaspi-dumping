@@ -97,12 +97,43 @@ export interface CatalogFilters {
   sort: string;
 }
 
+/** How one side of the price band is set in bulk. */
+export type LimitMode = "percent" | "tenge_offset" | "fixed" | "cost_markup";
+
+export interface LimitSpec {
+  mode: LimitMode;
+  value: string;
+}
+
 export interface BulkTools {
   skus?: string[];
-  set_min_percent?: string;
-  set_max_percent?: string;
+  /** Or the products of these rules, for a selection made rule by rule. */
+  rule_ids?: number[];
+  /** «Для товаров на продаже»: only what Kaspi shows right now. */
+  only_on_sale?: boolean;
+  /** One category, or "__none__" for products without one. */
+  category?: string;
+  /** «Применить также для товаров, которые уже имеют минимальную цену». */
+  overwrite_min?: boolean;
+  overwrite_max?: boolean;
+  min_limit?: LimitSpec;
+  max_limit?: LimitSpec;
+  step?: number;
+  auto_decrease?: boolean;
+  auto_increase?: boolean;
   raise_to_max?: boolean;
   disable_decrease_when_off_sale?: boolean;
+  /** «Предпросмотр»: work it all out, write nothing. */
+  dry_run?: boolean;
+}
+
+export interface BulkChange {
+  sku: string;
+  title: string;
+  min_before: Money | null;
+  min_after: Money;
+  max_before: Money | null;
+  max_after: Money;
 }
 
 export interface BulkToolsResult {
@@ -110,7 +141,12 @@ export interface BulkToolsResult {
   limits_set: number;
   prices_raised: number;
   decrease_disabled: number;
+  steps_set: number;
+  directions_set: number;
   skipped: Record<string, number>;
+  dry_run: boolean;
+  changes: BulkChange[];
+  changes_total: number;
 }
 
 export interface RuleList {
@@ -118,6 +154,8 @@ export interface RuleList {
   total: number;
   limit: number;
   offset: number;
+  /** Products per sale-filter option, under every other filter. */
+  sale_counts: { all: number; on: number; off: number };
 }
 
 export interface City {
@@ -265,6 +303,8 @@ export interface Settings {
   tax_percent: string;
   commission_percent: string;
   delivery_cost: Money;
+  home_city_id: string;
+  compete_home_city_only: boolean;
 }
 
 export interface SettingsDraft {
@@ -279,6 +319,8 @@ export interface SettingsDraft {
   tax_percent: string;
   commission_percent: string;
   delivery_cost: string;
+  home_city_id: string;
+  compete_home_city_only: boolean;
 }
 
 export interface KaspiCard {

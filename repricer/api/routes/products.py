@@ -278,15 +278,32 @@ def _apply(product: Product, payload: ProductIn) -> None:
             product.image_url = None
             product.image_checked_at = None
         product.kaspi_product_id = payload.kaspi_product_id
-    product.brand = payload.brand
-    product.base_price = payload.base_price
+    # A price list without a brand or price column sends nulls; that means "not
+    # given", not "erase": the own price anchors percent limits and the feed.
+    if payload.brand is not None:
+        product.brand = payload.brand
+    if payload.base_price is not None:
+        product.base_price = payload.base_price
     product.is_active = payload.is_active
-    # The payload is the whole truth about stock: what it omits is gone. Rows are
+    # No stores at all means "not given" too, not "delete every store": a product
+    # without one cannot be in the feed, so a re-import of prices alone would
+    # otherwise take the whole catalogue off sale.
+    if payload.availabilities:
+        _replace_availabilities(product, payload.availabilities)
+
+    _apply_rules(product, payload.rules)
+    # A percent-based floor means "this far below my price", so it moves when
+    # the merchant's own price does.
+    product.refresh_percent_limits()
+
+
+def _replace_availabilities(product: Product, availabilities: list[AvailabilityIn]) -> None:
+    # The list is the whole truth about stock: what it omits is gone. Rows are
     # matched by store_id and updated in place, because clearing the list first
     # would re-insert the same (product, store) pair before the delete lands and
     # trip the unique index.
     current = {entry.store_id: entry for entry in product.availabilities}
-    wanted = {entry.store_id: entry for entry in payload.availabilities}
+    wanted = {entry.store_id: entry for entry in availabilities}
     for store_id, entry in wanted.items():
         existing = current.get(store_id)
         if existing is None:
@@ -306,11 +323,6 @@ def _apply(product: Product, payload: ProductIn) -> None:
         if store_id not in wanted:
             product.availabilities.remove(existing)
 
-    _apply_rules(product, payload.rules)
-    # A percent-based floor means "this far below my price", so it moves when
-    # the merchant's own price does.
-    product.refresh_percent_limits()
-
 
 def _apply_rules(product: Product, rules: list[RuleInline]) -> None:
     """Create or update the cities that came with the product.
@@ -326,15 +338,12 @@ def _apply_rules(product: Product, rules: list[RuleInline]) -> None:
                                 min_price=wanted.min_price, max_price=wanted.max_price)
             product.rules.append(rule)
         rule.strategy = wanted.strategy
-        rule.min_price = wanted.min_price
-        rule.max_price = wanted.max_price
+        # Limits sent in tenge are exactly those limits, so a changed one drops
+        # the percentage the rule carried; an unchanged one keeps it.
+        rule.set_limits_in_tenge(min_price=wanted.min_price, max_price=wanted.max_price)
         rule.step = wanted.step
         rule.target_position = wanted.target_position
         rule.is_active = wanted.is_active
-        # Limits sent in tenge are exactly those limits, so any percentage the
-        # rule carried is no longer what the merchant means.
-        rule.min_percent = None
-        rule.max_percent = None
 
 
 def _product_out(product: Product) -> ProductOut:

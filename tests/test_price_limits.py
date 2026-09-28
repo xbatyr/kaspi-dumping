@@ -3,6 +3,7 @@ from decimal import Decimal
 import pytest
 
 from repricer.pricing import (
+    InvertedLimitsError,
     PercentLimits,
     PriceLimits,
     limits_from_percent,
@@ -135,3 +136,17 @@ def test_the_floor_does_not_walk_down_when_the_repriced_price_falls() -> None:
         limits = recalculated_limits(base, percent("10", "5"), limits)
 
     assert limits.min_price == Decimal(90_000)
+
+
+def test_strict_refuses_a_floor_above_the_kept_ceiling() -> None:
+    kept = PriceLimits(Decimal(50_000), Decimal(80_000))
+    floor_only = PercentLimits(min_percent=Decimal(10))
+
+    with pytest.raises(InvertedLimitsError) as caught:
+        limits_from_percent(Decimal(100_000), floor_only, kept, strict=True)
+
+    assert (caught.value.min_price, caught.value.max_price) == (Decimal(90_000), Decimal(80_000))
+    # Without strict the ceiling is lifted to the floor, as base price changes need.
+    assert limits_from_percent(Decimal(100_000), floor_only, kept) == PriceLimits(
+        Decimal(90_000), Decimal(90_000)
+    )

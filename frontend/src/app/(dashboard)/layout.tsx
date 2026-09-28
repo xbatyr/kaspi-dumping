@@ -1,5 +1,7 @@
 import Link from "next/link";
-import { Bot, LogOut, Settings, SlidersHorizontal, Package } from "lucide-react";
+import { Bot, Layers, LogOut, Settings, SlidersHorizontal, Package } from "lucide-react";
+
+import { SetupGuide } from "@/components/SetupGuide";
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   return <>
@@ -10,8 +12,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <p className="text-base font-semibold text-emerald-900">Kaspi Repricer</p>
           <p className="text-xs text-slate-500">Товары, стратегии и цены</p>
         </div>
-        <nav aria-label="Основные разделы" className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-3 border-t border-slate-200 bg-white px-2 pt-1 pb-[max(0.25rem,env(safe-area-inset-bottom))] shadow-[0_-4px_18px_-12px_rgba(15,23,42,0.25)] md:static md:flex md:flex-wrap md:items-center md:gap-1 md:border-0 md:bg-transparent md:p-0 md:shadow-none">
+        <nav aria-label="Основные разделы" className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-4 border-t border-slate-200 bg-white px-2 pt-1 pb-[max(0.25rem,env(safe-area-inset-bottom))] shadow-[0_-4px_18px_-12px_rgba(15,23,42,0.25)] md:static md:flex md:flex-wrap md:items-center md:gap-1 md:border-0 md:bg-transparent md:p-0 md:shadow-none">
           <Link href="/" className="inline-flex min-h-14 flex-col items-center justify-center gap-0.5 rounded-lg px-1 text-xs font-medium text-slate-700 active:bg-slate-100 md:min-h-0 md:flex-row md:gap-1 md:px-3 md:py-2 md:text-sm md:hover:bg-slate-100"><Package className="size-5 md:size-4" />Товары</Link>
+          <Link href="/bulk" className="inline-flex min-h-14 flex-col items-center justify-center gap-0.5 rounded-lg px-1 text-xs font-semibold text-[#345c7f] active:bg-slate-100 md:min-h-0 md:flex-row md:gap-1 md:bg-[#eef3f8] md:px-3 md:py-2 md:text-sm md:hover:bg-[#e2eaf3]"><Layers className="size-5 md:size-4" />Массовые</Link>
           <Link href="/strategies" className="inline-flex min-h-14 flex-col items-center justify-center gap-0.5 rounded-lg px-1 text-xs font-medium text-slate-700 active:bg-slate-100 md:min-h-0 md:flex-row md:gap-1 md:px-3 md:py-2 md:text-sm md:hover:bg-slate-100"><SlidersHorizontal className="size-5 md:size-4" />Стратегии</Link>
           <Link href="/settings" className="inline-flex min-h-14 flex-col items-center justify-center gap-0.5 rounded-lg px-1 text-xs font-medium text-slate-700 active:bg-slate-100 md:min-h-0 md:flex-row md:gap-1 md:px-3 md:py-2 md:text-sm md:hover:bg-slate-100"><Settings className="size-5 md:size-4" />Настройки</Link>
         </nav>
@@ -19,5 +22,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       </div>
     </header>
     <main className="mx-auto max-w-7xl px-4 pt-4 pb-24 sm:px-6 md:py-6">{children}</main>
+    <SetupGuide />
   </>;
 }

@@ -146,7 +146,10 @@ def put_global_strategy(
         if not _configured(product):
             continue
         template = next(rule for rule in product.rules if rule.max_price > rule.min_price)
-        _apply(product, settings, template.min_price, template.max_price, template.step)
+        # Carry the percentages over: changing the strategy is not the merchant
+        # retyping the limits, so they keep following the product's own price.
+        _apply(product, settings, template.min_price, template.max_price, template.step,
+               template.percent_limits)
     session.commit()
     return _out(settings, products)
 

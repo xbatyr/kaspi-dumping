@@ -13,6 +13,7 @@ from repricer.api.app import create_app
 from repricer.api.deps import get_merchant, get_session
 from repricer.api.settings import ApiSettings, get_settings
 from repricer.db import PriceHistory, Product, ProductAvailability, RepricerRule, ShopSettings
+from repricer.db.settings_store import load_settings
 from repricer.pricing import DecisionReason, PricingStrategy
 from repricer.uploader import MerchantIdentity
 
@@ -623,6 +624,35 @@ def test_feed_serves_the_current_prices(session: Session, client: TestClient) ->
     }
 
 
+def test_home_city_only_sells_other_cities_at_the_own_price(
+    session: Session, client: TestClient
+) -> None:
+    make_product(session, "IPH-256", base_price=400000, cities={ALMATY: 362000, ASTANA: 366000})
+    shop = load_settings(session)
+    shop.home_city_id, shop.compete_home_city_only = ALMATY, True
+    session.flush()
+
+    root = ET.fromstring(client.get("/feed/kaspi.xml").content)
+
+    # Astana stays on sale, at the base price rather than the bot's last price.
+    assert {node.get("cityId"): node.text for node in root.iter(f"{NS}cityprice")} == {
+        ALMATY: "362000",
+        ASTANA: "400000",
+    }
+
+
+def test_home_city_setting_round_trips(client: TestClient) -> None:
+    saved = client.put(
+        "/api/settings",
+        json=settings_payload(home_city_id=ASTANA, compete_home_city_only=True),
+    ).json()
+
+    assert (saved["home_city_id"], saved["compete_home_city_only"]) == (ASTANA, True)
+    assert client.put(
+        "/api/settings", json=settings_payload(home_city_id="Астана")
+    ).status_code == 422
+
+
 def test_paused_rule_keeps_its_last_price_in_the_feed(
     session: Session, client: TestClient
 ) -> None:
@@ -663,14 +693,20 @@ def test_feed_etag_changes_when_a_price_does(session: Session, client: TestClien
     assert client.get("/feed/kaspi.xml").headers["etag"] != etag
 
 
-def test_feed_refuses_partial_catalogue(session: Session, client: TestClient) -> None:
+def test_feed_leaves_unfinished_products_out(session: Session, client: TestClient) -> None:
     make_product(session, "GOOD", cities={ALMATY: 362000})
     make_product(session, "NO-BRAND", brand=None, cities={ALMATY: 1000})
     make_product(session, "NO-STORE", stores=False, cities={ALMATY: 1000})
     make_product(session, "NO-PRICE", cities={ALMATY: None})
     make_product(session, "INACTIVE", active=False, cities={ALMATY: 1000})
 
-    assert client.get("/feed/kaspi.xml").status_code == 503
+    response = client.get("/feed/kaspi.xml")
+
+    # One product without a pickup point or a price must not take the whole
+    # price list down with it; the dashboard shows it as a blocker instead.
+    assert response.status_code == 200
+    root = ET.fromstring(response.content)
+    assert sorted(offer.get("sku") for offer in root.iter(f"{NS}offer")) == ["GOOD", "NO-BRAND"]
 
 
 def test_feed_refuses_to_serve_an_empty_catalogue(session: Session, client: TestClient) -> None:
@@ -680,7 +716,7 @@ def test_feed_refuses_to_serve_an_empty_catalogue(session: Session, client: Test
 
     # An empty feed would take the whole shop off Kaspi, so it is never served.
     assert response.status_code == 503
-    assert "прайс неполный" in response.json()["detail"]
+    assert "пустой прайс" in response.json()["detail"]
 
 
 # --- Documentation ------------------------------------------------------------

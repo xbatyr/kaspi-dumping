@@ -53,7 +53,8 @@ export function parseCatalogCsv(text: string, cities: City[]): ParsedCatalog {
   }
 
   const separator = pickSeparator(lines[0]);
-  const columns = mapColumns(splitRow(lines[0], separator));
+  const headers = splitRow(lines[0], separator);
+  const columns = mapColumns(headers);
   const missing = ["sku", "title", "kaspi_product_id"].filter((name) => !(name in columns));
   if (missing.length > 0) {
     return {
@@ -68,31 +69,65 @@ export function parseCatalogCsv(text: string, cities: City[]): ParsedCatalog {
 
   lines.slice(1).forEach((line, index) => {
     const cells = splitRow(line, separator);
+    const row = index + 2;
+    // A row with more or fewer cells than the header has shifted: an unquoted
+    // separator inside a title ("iPhone 13, 128Gb") moves every later value one
+    // column along, and the stock or the price then reads the wrong cell. No
+    // guessing which cell is which; the row is refused.
+    if (cells.length !== headers.length) {
+      errors.push(
+        `строка ${row}: ${cells.length} колонок вместо ${headers.length} — значения съехали. ` +
+          `Возьмите в кавычки текст, где есть «${separator === "\t" ? "табуляция" : separator}».`,
+      );
+      return;
+    }
     const value = (name: string) => {
       const at = columns[name];
       return at === undefined ? "" : (cells[at] ?? "").trim();
     };
-    const row = index + 2;
+    // Every numeric cell is read strictly: digits, spaces and a currency sign at
+    // most. "Apple iPhone 13" in a number column is an error, never 13.
+    const fail = (message: string) => {
+      errors.push(`строка ${row}: ${message}`);
+    };
     const sku = value("sku");
-    const kaspiId = value("kaspi_product_id").replace(/\D/g, "");
+    const title = value("title");
+    const kaspiId = kaspiCardId(value("kaspi_product_id"));
 
-    if (!sku) {
-      errors.push(`строка ${row}: пустой SKU`);
-      return;
+    if (!sku) return fail("пустой SKU");
+    if (kaspiId === null) {
+      return fail(
+        `ID карточки Kaspi «${value("kaspi_product_id")}» — нужны только цифры или ссылка на карточку`,
+      );
     }
-    if (!kaspiId) {
-      errors.push(`строка ${row}: не разобрал ID карточки Kaspi (нужны цифры из ссылки)`);
-      return;
+    // A title that is only a number is almost always a price or a stock that
+    // slid into the wrong column.
+    if (/^[\d\s.,₸]+$/.test(title)) return fail(`название «${title}» похоже на число`);
+
+    const basePrice = money(value("base_price"));
+    if (basePrice === INVALID) return fail(`цена «${value("base_price")}» — нужно целое число тенге`);
+    const stock = wholeNumber(value("stock"), 0, 2_147_483_647);
+    if (stock === INVALID) return fail(`остаток «${value("stock")}» — нужно целое число от 0`);
+    const step = wholeNumber(value("step"), 1, 1_000_000);
+    if (step === INVALID) return fail(`шаг «${value("step")}» — нужно целое число от 1`);
+    const position = wholeNumber(value("target_position"), 1, 20);
+    if (position === INVALID) return fail(`позиция «${value("target_position")}» — от 1 до 20`);
+
+    const known = bySku.get(sku);
+    // Repeating a SKU adds a city or a pickup point, not a different product: a
+    // repeat with another card ID is a mix-up between two rows.
+    if (known && known.kaspi_product_id !== kaspiId) {
+      return fail(`SKU ${sku} уже был с карточкой ${known.kaspi_product_id}, здесь ${kaspiId}`);
     }
 
     const product =
       bySku.get(sku) ??
       ({
         sku,
-        title: value("title") || sku,
+        title: title || sku,
         kaspi_product_id: kaspiId,
         brand: value("brand") || null,
-        base_price: number(value("base_price")),
+        base_price: basePrice,
         is_active: true,
         availabilities: [],
         rules: [],
@@ -104,7 +139,7 @@ export function parseCatalogCsv(text: string, cities: City[]): ParsedCatalog {
       product.availabilities.push({
         store_id: store,
         available: true,
-        stock_count: value("stock") ? Number(value("stock").replace(/\s/g, "")) || 0 : null,
+        stock_count: stock,
       });
     }
 
@@ -117,12 +152,12 @@ export function parseCatalogCsv(text: string, cities: City[]): ParsedCatalog {
         errors.push(`строка ${row}: неизвестный город «${cityCell}»`);
         return;
       }
-      const min = number(value("min_price"));
-      const max = number(value("max_price"));
-      if (!min || !max) {
-        errors.push(`строка ${row}: для города нужны мин. и макс. цена`);
-        return;
+      const min = money(value("min_price"));
+      const max = money(value("max_price"));
+      if (min === INVALID || max === INVALID) {
+        return fail("мин. и макс. цена — целые числа тенге");
       }
+      if (!min || !max) return fail("для города нужны мин. и макс. цена");
       if (Number(min) > Number(max)) {
         errors.push(`строка ${row}: мин. цена больше макс.`);
         return;
@@ -137,11 +172,8 @@ export function parseCatalogCsv(text: string, cities: City[]): ParsedCatalog {
         strategy,
         min_price: min,
         max_price: max,
-        step: value("step") ? Number(value("step")) || 1 : 1,
-        target_position:
-          strategy === "target_position"
-            ? Number(value("target_position")) || 2
-            : null,
+        step: step ?? 1,
+        target_position: strategy === "target_position" ? (position ?? 2) : null,
       };
       const existing = product.rules.findIndex((item) => item.city_id === cityId);
       if (existing >= 0) product.rules[existing] = rule;
@@ -176,9 +208,35 @@ function humanColumn(field: string): string {
   return ALIASES[field]?.[1] ?? field;
 }
 
-function number(raw: string): string | null {
-  const cleaned = raw.replace(/[^\d.,]/g, "").replace(",", ".");
-  return cleaned ? String(Math.round(Number(cleaned))) : null;
+/** Marks a cell that is filled in but is not the number it should be. */
+const INVALID = Symbol("invalid");
+
+/**
+ * Whole tenge, as Excel writes it: "330000", "330 000", "330 000 ₸", "330000,00".
+ * Kopecks other than zero, letters or a second number in the cell are refused.
+ */
+function money(raw: string): string | null | typeof INVALID {
+  const cleaned = raw.replace(/[\s\u00a0\u202f]/g, "").replace(/(₸|тг\.?|kzt)$/i, "");
+  if (!cleaned) return null;
+  const match = /^(\d{1,10})(?:[.,]0{1,2})?$/.exec(cleaned);
+  if (!match || Number(match[1]) <= 0) return INVALID;
+  return String(Number(match[1]));
+}
+
+function wholeNumber(raw: string, min: number, max: number): number | null | typeof INVALID {
+  const cleaned = raw.replace(/[\s\u00a0\u202f]/g, "");
+  if (!cleaned) return null;
+  if (!/^\d{1,10}$/.test(cleaned)) return INVALID;
+  const value = Number(cleaned);
+  return value < min || value > max ? INVALID : value;
+}
+
+/** The digits of a card ID, typed as is or taken from a kaspi.kz/shop/p/…-123/ link. */
+function kaspiCardId(raw: string): string | null {
+  const value = raw.trim();
+  if (/^\d{1,64}$/.test(value)) return value;
+  const link = /kaspi\.kz\/shop\/p\/[^?#\s]*?-(\d{5,64})\/?(?:[?#].*)?$/i.exec(value);
+  return link ? link[1] : null;
 }
 
 function pickSeparator(header: string): string {

@@ -88,9 +88,12 @@ def adjust_min_price(
     target = (before * (100 + Decimal(percent)) / 100).quantize(
         Decimal(1), rounding=ROUND_HALF_UP
     )
-    # min_price is a floor, not a wish: it may not pass max_price or reach zero.
-    after = max(Decimal(1), min(target, rule.max_price))
-    rule.min_price = after
+    # min_price is a floor, not a wish: it may not reach zero, and it stays below
+    # max_price, because a rule with Min = Max has no room left and the shared
+    # strategy stops repricing it altogether.
+    after = max(Decimal(1), min(target, rule.max_price - 1))
+    # Typed by hand, so it no longer follows a percentage of the own price.
+    rule.set_limits_in_tenge(min_price=after)
     session.commit()
     return MinPriceChange(
         sku=rule.product.sku,

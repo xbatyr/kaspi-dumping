@@ -82,6 +82,12 @@ export async function runBulkTools(tools: BulkTools): Promise<BulkToolsResult> {
   return (await response.json()) as BulkToolsResult;
 }
 
+/** The selection bar's «Снять с продажи» / «Вернуть в продажу». */
+export async function setOnSale(skus: string[], isActive: boolean): Promise<number> {
+  const response = await send("/api/tools/sale", "POST", { skus, is_active: isActive });
+  return ((await response.json()) as { updated: number }).updated;
+}
+
 /** The margin calculator: what is left of one sale at this price. */
 export async function previewMargin(input: {
   price: string;

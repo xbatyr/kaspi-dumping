@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, selectinload
 from repricer.api.catalog_query import (
     bot_filter,
     category_filter,
+    on_sale,
     order_by,
     product_margins,
     sale_filter,
@@ -34,6 +35,7 @@ from repricer.api.schemas import (
     RuleOut,
     RuleStatusOut,
     RuleUpdate,
+    SaleCountsOut,
 )
 from repricer.db.models import PriceHistory, Product, RepricerRule
 from repricer.db.queries import latest_changes
@@ -68,8 +70,7 @@ def configure_product_rules(
             session.add(rule)
             by_city[city_id] = rule
         rule.strategy = payload.strategy
-        rule.min_price = payload.min_price
-        rule.max_price = payload.max_price
+        rule.set_limits_in_tenge(min_price=payload.min_price, max_price=payload.max_price)
         rule.step = payload.step
         rule.target_position = payload.target_position
         rule.ignored_merchants = list(payload.ignored_merchants)
@@ -106,11 +107,12 @@ def list_rules(
 ) -> RuleListOut:
     shop = load_settings(session)
     filters = [Product.merchant_id == merchant.merchant_id]
+    sale_predicate = sale_filter(sale)
     filters += [
         predicate
         for predicate in (
             bot_filter(bot),
-            sale_filter(sale),
+            sale_predicate,
             category_filter(category),
             search_filter(search),
         )
@@ -130,6 +132,13 @@ def list_rules(
         )
 
     total = session.scalar(select(func.count()).select_from(Product).where(*filters)) or 0
+    # The same filters minus the sale switch, in one pass over the products.
+    unsold_filters = [predicate for predicate in filters if predicate is not sale_predicate]
+    count_all, count_on = session.execute(
+        select(func.count(), func.count().filter(on_sale()))
+        .select_from(Product)
+        .where(*unsold_filters)
+    ).one()
     products = session.scalars(
         select(Product)
         .where(*filters)
@@ -176,7 +185,13 @@ def list_rules(
         )
         for product in products
     ]
-    return RuleListOut(items=items, total=total, limit=limit, offset=offset)
+    return RuleListOut(
+        items=items,
+        total=total,
+        limit=limit,
+        offset=offset,
+        sale_counts=SaleCountsOut(all=count_all, on=count_on, off=count_all - count_on),
+    )
 
 
 @router.get("/categories", summary="Category menu of the catalogue")
@@ -249,8 +264,7 @@ def update_rule(
             f"the fixed_price strategy holds the product's base_price, which {rule.product.sku} does not have",
         )
     rule.strategy = payload.strategy
-    rule.min_price = payload.min_price
-    rule.max_price = payload.max_price
+    rule.set_limits_in_tenge(min_price=payload.min_price, max_price=payload.max_price)
     rule.step = payload.step
     rule.target_position = payload.target_position
     rule.ignored_merchants = list(payload.ignored_merchants)
@@ -333,10 +347,7 @@ def bulk_update(
             rule.strategy = payload.strategy
             if payload.strategy is not PricingStrategy.TARGET_POSITION:
                 rule.target_position = None
-        if payload.min_price is not None:
-            rule.min_price = payload.min_price
-        if payload.max_price is not None:
-            rule.max_price = payload.max_price
+        rule.set_limits_in_tenge(min_price=payload.min_price, max_price=payload.max_price)
         if payload.step is not None:
             rule.step = payload.step
         if payload.target_position is not None and rule.strategy is PricingStrategy.TARGET_POSITION:
@@ -356,7 +367,10 @@ def bulk_update(
             selected = next(rule for rule in rules if rule.product_id == product.id)
             if selected.max_price <= selected.min_price:
                 raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "для демпинга Max должен быть выше Min")
-            _apply(product, global_settings, selected.min_price, selected.max_price, selected.step)
+            # The side left empty keeps its percentage, and the one just typed
+            # in tenge was already cleared of it above.
+            _apply(product, global_settings, selected.min_price, selected.max_price, selected.step,
+                   selected.percent_limits)
             if payload.is_active is False:
                 for rule in product.rules:
                     rule.is_active = False

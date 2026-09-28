@@ -26,6 +26,19 @@ _ONE = Decimal(1)
 _HUNDRED = Decimal(100)
 
 
+class InvertedLimitsError(ValueError):
+    """The floor came out above the ceiling.
+
+    Only raised on request (``strict=True``): the bulk tools must refuse the
+    whole selection then, while a base price change keeps clamping quietly.
+    """
+
+    def __init__(self, min_price: Decimal, max_price: Decimal) -> None:
+        super().__init__(f"min price {min_price} is above max price {max_price}")
+        self.min_price = min_price
+        self.max_price = max_price
+
+
 @dataclass(frozen=True, slots=True)
 class PriceLimits:
     """The pair the engine actually uses, in whole tenge."""
@@ -68,7 +81,11 @@ class PercentLimits:
 
 
 def limits_from_percent(
-    base_price: Decimal, percent: PercentLimits, current: PriceLimits | None = None
+    base_price: Decimal,
+    percent: PercentLimits,
+    current: PriceLimits | None = None,
+    *,
+    strict: bool = False,
 ) -> PriceLimits:
     """Turn "10% down, 5% up" into the two absolute prices for that base price.
 
@@ -76,7 +93,10 @@ def limits_from_percent(
     the allowed band narrower than what was asked for — never wider than the
     merchant's intent. The floor is at least 1 ₸, which the database requires.
 
-    A side set to ``None`` keeps its figure from ``current``.
+    A side set to ``None`` keeps its figure from ``current``. That is how the
+    floor can end up above the ceiling (a floor at the own price, a ceiling left
+    from before the price went up); ``strict`` then raises
+    :class:`InvertedLimitsError` instead of lifting the ceiling to the floor.
     """
     if not isinstance(base_price, Decimal):
         raise TypeError(f"base_price must be a Decimal, got {type(base_price).__name__}")
@@ -97,6 +117,8 @@ def limits_from_percent(
     else:
         maximum = base_price * (_ONE + percent.max_percent / _HUNDRED)
         ceiling = maximum.quantize(_ONE, rounding=ROUND_FLOOR)
+    if strict and ceiling < floor:
+        raise InvertedLimitsError(floor, ceiling)
     # The database refuses a ceiling below the floor, and so would the engine.
     return PriceLimits(min_price=floor, max_price=max(ceiling, floor))
 

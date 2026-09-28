@@ -92,6 +92,10 @@ def skus(response: Any) -> list[str]:
     return [item["sku"] for item in response.json()["items"]]
 
 
+def skus_of(body: dict[str, Any]) -> list[str]:
+    return [item["sku"] for item in body["items"]]
+
+
 # --- Filters ------------------------------------------------------------------
 
 
@@ -318,6 +322,68 @@ def test_limits_given_in_tenge_stay_where_they_were_put(
     assert rule["min_percent"] is None
 
 
+def _raise_own_price(client: TestClient, price: str) -> None:
+    client.put(
+        "/api/products/A",
+        json={"sku": "A", "title": "Товар", "kaspi_product_id": "102298404", "base_price": price},
+    )
+
+
+def test_a_floor_retyped_in_tenge_is_not_taken_back_by_the_old_percentage(
+    client: TestClient, session: Session
+) -> None:
+    add_product(session, "A", base_price=100_000)
+    client.put("/api/strategy/products/A/limits", json={"min_percent": "10", "max_percent": "5"})
+    rule_id = client.get("/api/products/A").json()["rules"][0]["id"]
+
+    client.post("/api/rules/bulk-update", json={"rule_ids": [rule_id], "min_price": "80000"})
+    _raise_own_price(client, "120000")
+
+    rule = client.get("/api/products/A").json()["rules"][0]
+    # The floor the merchant typed stays; the ceiling still follows its percentage.
+    assert (rule["min_price"], rule["min_percent"]) == ("80000", None)
+    assert (rule["max_price"], rule["max_percent"]) == ("126000", "5.00")
+
+
+def test_saving_the_shared_strategy_keeps_percent_limits(
+    client: TestClient, session: Session
+) -> None:
+    add_product(session, "A", base_price=100_000)
+    client.put("/api/strategy/products/A/limits", json={"min_percent": "10", "max_percent": "5"})
+
+    client.put("/api/strategy", json={"strategy": "beat_first", "city_ids": [ALMATY]})
+    _raise_own_price(client, "120000")
+
+    rule = client.get("/api/products/A").json()["rules"][0]
+    assert (rule["min_percent"], rule["max_percent"]) == ("10.00", "5.00")
+    assert (rule["min_price"], rule["max_price"]) == ("108000", "126000")
+
+
+def test_a_price_list_without_stock_or_price_columns_erases_nothing(
+    client: TestClient, session: Session
+) -> None:
+    add_product(session, "A", base_price=100_000)
+
+    client.post(
+        "/api/products/import",
+        json={"items": [{"sku": "A", "title": "Товар", "kaspi_product_id": "102298404"}]},
+    )
+
+    product = client.get("/api/products/A").json()
+    assert product["base_price"] == "100000"
+    assert product["brand"] == "Apple"
+    assert [entry["store_id"] for entry in product["availabilities"]] == ["PP1"]
+
+
+def test_an_own_price_with_tiyn_is_refused(client: TestClient, session: Session) -> None:
+    response = client.post(
+        "/api/products",
+        json={"sku": "B", "title": "Товар", "base_price": "100.50"},
+    )
+
+    assert response.status_code == 422
+
+
 def test_one_side_in_percent_and_one_in_tenge(client: TestClient, session: Session) -> None:
     add_product(session, "A", base_price=100_000)
 
@@ -397,6 +463,197 @@ def test_bulk_tools_touch_only_the_selected_products(
     assert items["A"]["rules"][0]["min_percent"] == "10.00"
     # B keeps the limits it was created with and never learned a percentage.
     assert items["B"]["rules"][0]["min_percent"] is None
+
+
+def test_one_inverted_band_refuses_the_whole_selection(
+    client: TestClient, session: Session
+) -> None:
+    add_product(session, "A", base_price=100_000)
+    # B's ceiling (110 000, kept by "не менять") is below a floor 5% under 200 000.
+    add_product(session, "B", base_price=200_000)
+
+    response = client.post("/api/tools/bulk", json={"set_min_percent": "5"})
+
+    assert response.status_code == 422
+    assert "B (190000 > 110000)" in response.json()["detail"]
+    items = {item["sku"]: item for item in client.get("/api/rules").json()["items"]}
+    # A would have been fine on its own, and is still untouched.
+    assert items["A"]["rules"][0]["min_price"] == "90000"
+    assert items["A"]["rules"][0]["min_percent"] is None
+
+
+def test_the_side_left_empty_is_not_overwritten(client: TestClient, session: Session) -> None:
+    add_product(session, "A", base_price=100_000)
+
+    client.post("/api/tools/bulk", json={"set_min_percent": "5"})
+
+    rule = client.get("/api/rules").json()["items"][0]["rules"][0]
+    assert (rule["min_price"], rule["max_price"]) == ("95000", "110000")
+    assert rule["max_percent"] is None
+
+
+def test_bulk_can_be_limited_to_products_on_sale(client: TestClient, session: Session) -> None:
+    add_product(session, "ON")
+    add_product(session, "OFF", stock=0)
+
+    result = client.post("/api/tools/bulk", json={"only_on_sale": True, "set_min_percent": "5"}).json()
+
+    assert (result["products_seen"], result["limits_set"]) == (2, 1)
+    items = {item["sku"]: item for item in client.get("/api/rules").json()["items"]}
+    assert items["ON"]["rules"][0]["min_price"] == "95000"
+    assert items["OFF"]["rules"][0]["min_price"] == "90000"
+
+
+def test_bulk_keeps_existing_floors_unless_asked_to_overwrite(
+    client: TestClient, session: Session
+) -> None:
+    add_product(session, "BAND")  # 90 000 – 110 000 already
+    fresh = add_product(session, "FRESH")
+    fresh.rules[0].min_price = fresh.rules[0].max_price = Decimal(100_000)
+    session.flush()
+
+    result = client.post(
+        "/api/tools/bulk", json={"set_min_percent": "5", "overwrite_min": False}
+    ).json()
+
+    assert result["limits_set"] == 1
+    assert result["skipped"] == {"границы уже заданы": 1}
+    items = {item["sku"]: item for item in client.get("/api/rules").json()["items"]}
+    assert items["BAND"]["rules"][0]["min_price"] == "90000"
+    assert items["BAND"]["auto_decrease"] is True
+    assert items["FRESH"]["rules"][0]["min_price"] == "95000"
+
+
+def test_selection_bar_takes_products_off_sale_in_one_request(
+    client: TestClient, session: Session
+) -> None:
+    add_product(session, "A")
+    add_product(session, "B")
+    add_product(session, "C")
+
+    result = client.post("/api/tools/sale", json={"skus": ["A", "B"], "is_active": False}).json()
+
+    assert result == {"updated": 2}
+    body = client.get("/api/rules", params={"sale": "on"}).json()
+    assert skus_of(body) == ["C"]
+    assert body["sale_counts"] == {"all": 3, "on": 1, "off": 2}
+
+
+def test_bulk_limits_in_tenge_from_the_price_and_as_one_fixed_figure(
+    client: TestClient, session: Session
+) -> None:
+    add_product(session, "A", base_price=100_000)
+    add_product(session, "B", base_price=50_000)
+
+    result = client.post("/api/tools/bulk", json={
+        "min_limit": {"mode": "tenge_offset", "value": "2000"},
+        "max_limit": {"mode": "fixed", "value": "150000"},
+    }).json()
+
+    assert result["limits_set"] == 2
+    items = {item["sku"]: item["rules"][0] for item in client.get("/api/rules").json()["items"]}
+    assert (items["A"]["min_price"], items["A"]["max_price"]) == ("98000", "150000")
+    assert (items["B"]["min_price"], items["B"]["max_price"]) == ("48000", "150000")
+    # Tenge figures do not follow the own price, so no percentage is kept.
+    assert (items["A"]["min_percent"], items["A"]["max_percent"]) == (None, None)
+
+
+def test_bulk_floor_from_cost_never_sells_at_a_loss(
+    client: TestClient, session: Session, shop: Any
+) -> None:
+    add_product(session, "A", base_price=100_000, purchase_price=50_000)
+    add_product(session, "NO-COST", base_price=100_000)
+
+    result = client.post(
+        "/api/tools/bulk", json={"min_limit": {"mode": "cost_markup", "value": "10"}}
+    ).json()
+
+    # Break-even: (50 000 cost + 1 500 delivery) / (1 − 12% − 3%) = 60 589 ₸; +10% → 66 648 ₸.
+    assert result["skipped"] == {"нет себестоимости": 1}
+    rule = client.get("/api/products/A").json()["rules"][0]
+    assert (rule["min_price"], rule["max_price"]) == ("66648", "110000")
+
+
+def test_bulk_preview_reports_every_change_and_writes_nothing(
+    client: TestClient, session: Session
+) -> None:
+    add_product(session, "A", base_price=100_000)
+
+    preview = client.post("/api/tools/bulk", json={
+        "min_limit": {"mode": "percent", "value": "5"}, "step": 7, "auto_increase": True,
+        "dry_run": True,
+    }).json()
+
+    assert preview["dry_run"] is True
+    assert (preview["limits_set"], preview["steps_set"], preview["directions_set"]) == (1, 1, 1)
+    assert preview["changes"] == [{
+        "sku": "A", "title": "Товар",
+        "min_before": "90000", "min_after": "95000", "max_before": "110000", "max_after": "110000",
+    }]
+    item = client.get("/api/rules").json()["items"][0]
+    assert (item["rules"][0]["min_price"], item["rules"][0]["step"]) == ("90000", 1)
+    assert item["auto_increase"] is False
+
+
+def test_bulk_step_and_directions_without_touching_limits(
+    client: TestClient, session: Session
+) -> None:
+    add_product(session, "A")
+
+    result = client.post(
+        "/api/tools/bulk", json={"step": 5, "auto_decrease": False, "auto_increase": True}
+    ).json()
+
+    assert (result["limits_set"], result["steps_set"], result["directions_set"]) == (0, 1, 1)
+    item = client.get("/api/rules").json()["items"][0]
+    assert (item["rules"][0]["step"], item["rules"][0]["min_price"]) == (5, "90000")
+    assert (item["auto_decrease"], item["auto_increase"]) == (False, True)
+
+
+def test_bulk_can_be_limited_to_one_category(client: TestClient, session: Session) -> None:
+    add_product(session, "PC", category="Системные блоки")
+    add_product(session, "CASE", category="Чехлы")
+
+    client.post("/api/tools/bulk", json={
+        "category": "Системные блоки", "min_limit": {"mode": "percent", "value": "5"},
+    })
+
+    items = {item["sku"]: item["rules"][0] for item in client.get("/api/rules").json()["items"]}
+    assert (items["PC"]["min_price"], items["CASE"]["min_price"]) == ("95000", "90000")
+
+
+@pytest.mark.parametrize(
+    "limit",
+    [
+        {"mode": "percent", "value": "95"},
+        {"mode": "fixed", "value": "0"},
+        {"mode": "cost_markup", "value": "600"},
+        {"mode": "guess", "value": "10"},
+    ],
+)
+def test_bulk_refuses_a_limit_that_makes_no_sense(
+    client: TestClient, session: Session, limit: dict[str, str]
+) -> None:
+    add_product(session, "A")
+
+    assert client.post("/api/tools/bulk", json={"min_limit": limit}).status_code == 422
+
+
+def test_bulk_selection_by_rule_takes_percentages_too(
+    client: TestClient, session: Session
+) -> None:
+    picked = add_product(session, "A", base_price=100_000)
+    add_product(session, "B", base_price=100_000)
+
+    client.post("/api/tools/bulk", json={
+        "rule_ids": [picked.rules[0].id],
+        "min_limit": {"mode": "percent", "value": "5"},
+        "max_limit": {"mode": "percent", "value": "20"},
+    })
+
+    items = {item["sku"]: item["rules"][0] for item in client.get("/api/rules").json()["items"]}
+    assert (items["A"]["min_price"], items["A"]["max_price"]) == ("95000", "120000")
+    assert (items["B"]["min_price"], items["B"]["max_price"]) == ("90000", "110000")
 
 
 def test_bulk_raise_puts_todays_price_up_to_the_ceiling(
