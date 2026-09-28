@@ -296,6 +296,25 @@ class CategoryOut(BaseModel):
     products: int
 
 
+#: How one side of the price band is set in bulk:
+#:   percent       a share of the product's own price (−10% for the floor, +10%
+#:                 for the ceiling); stored, so it follows the own price later
+#:   tenge_offset  a fixed number of tenge away from the own price
+#:   fixed         the same tenge figure for every product
+#:   cost_markup   the break-even price (cost, commission, tax, delivery) plus
+#:                 a percentage: a floor that can never sell at a loss
+LimitMode = Literal["percent", "tenge_offset", "fixed", "cost_markup"]
+
+
+class LimitSpec(BaseModel):
+    """One side of the band: how it is worked out, and by how much."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: LimitMode
+    value: Annotated[Decimal, Field(ge=0, max_digits=12, decimal_places=2, examples=["10"])]
+
+
 class BulkToolsIn(BaseModel):
     """The catalogue-wide tools, as one atomic request.
 
@@ -307,29 +326,67 @@ class BulkToolsIn(BaseModel):
 
     #: Which products to touch; empty means every product of the shop.
     skus: list[Sku] = Field(default_factory=list, max_length=5_000)
+    #: Or the products these rules belong to, for a selection made by rule.
+    rule_ids: list[int] = Field(default_factory=list, max_length=5_000)
     #: "Для товаров на продаже": new limits and raised prices only for what
     #: Kaspi shows now. Does not narrow disable_decrease_when_off_sale.
     only_on_sale: bool = False
+    #: Only this category; NO_CATEGORY for products without one.
+    category: str | None = Field(default=None, max_length=128)
     #: "Применить также для товаров, которые уже имеют минимальную цену". Off
     #: leaves a product that already has a price band with its own floor.
     overwrite_min: bool = True
     #: The same for the ceiling.
     overwrite_max: bool = True
-    #: Set a floor this far below each product's own price and allow lowering.
+    #: The floor, and with it permission to lower the price.
+    min_limit: LimitSpec | None = None
+    #: The ceiling, and with it permission to raise the price.
+    max_limit: LimitSpec | None = None
+    #: Shorthands kept for older clients: the same as a "percent" limit.
     set_min_percent: DiscountPercent | None = None
-    #: Set a ceiling this far above each product's own price and allow raising.
     set_max_percent: MarkupPercent | None = None
+    #: Undercut step in whole tenge for every rule of the products.
+    step: int | None = Field(default=None, ge=1, le=1_000_000)
+    #: Switch lowering or raising on or off outright; None leaves it as setting
+    #: a floor or ceiling left it.
+    auto_decrease: bool | None = None
+    auto_increase: bool | None = None
     #: Push today's price up to the ceiling, for when the competition has left.
     raise_to_max: bool = False
     #: Stop lowering prices of products that are not on sale right now.
     disable_decrease_when_off_sale: bool = False
+    #: Work everything out and report it, but write nothing: «Предпросмотр».
+    dry_run: bool = False
 
     @model_validator(mode="after")
     def check_something_to_do(self) -> Self:
+        if self.set_min_percent is not None:
+            if self.min_limit is not None:
+                raise ValueError("минимум задаётся один раз")
+            self.min_limit = LimitSpec(mode="percent", value=self.set_min_percent)
+        if self.set_max_percent is not None:
+            if self.max_limit is not None:
+                raise ValueError("максимум задаётся один раз")
+            self.max_limit = LimitSpec(mode="percent", value=self.set_max_percent)
+        for side, spec, percent_cap in (
+            ("минимум", self.min_limit, MAX_DISCOUNT_PERCENT),
+            ("максимум", self.max_limit, MAX_MARKUP_PERCENT),
+        ):
+            if spec is None:
+                continue
+            if spec.mode == "percent" and spec.value > percent_cap:
+                raise ValueError(f"{side}: не больше {percent_cap}% от цены")
+            if spec.mode == "cost_markup" and spec.value > MAX_MARKUP_PERCENT:
+                raise ValueError(f"{side}: наценка не больше {MAX_MARKUP_PERCENT}%")
+            if spec.mode == "fixed" and spec.value <= 0:
+                raise ValueError(f"{side}: фиксированная цена должна быть больше нуля")
         if not any(
             (
-                self.set_min_percent is not None,
-                self.set_max_percent is not None,
+                self.min_limit is not None,
+                self.max_limit is not None,
+                self.step is not None,
+                self.auto_decrease is not None,
+                self.auto_increase is not None,
                 self.raise_to_max,
                 self.disable_decrease_when_off_sale,
             )
@@ -337,7 +394,19 @@ class BulkToolsIn(BaseModel):
             raise ValueError("выберите хотя бы одно действие")
         if len(set(self.skus)) != len(self.skus):
             raise ValueError("в списке есть повторяющиеся артикулы")
+        self.rule_ids = list(dict.fromkeys(self.rule_ids))
         return self
+
+
+class BulkChangeOut(BaseModel):
+    """One product's band before and after, for the preview table."""
+
+    sku: str
+    title: str
+    min_before: MoneyOut | None
+    min_after: MoneyOut
+    max_before: MoneyOut | None
+    max_after: MoneyOut
 
 
 class BulkToolsOut(BaseModel):
@@ -347,8 +416,15 @@ class BulkToolsOut(BaseModel):
     limits_set: int = Field(description="Products whose floor or ceiling changed.")
     prices_raised: int = Field(description="Products whose current price moved up to the maximum.")
     decrease_disabled: int
+    steps_set: int = 0
+    directions_set: int = 0
     #: Products left untouched, with the reason: no card, no own price, and so on.
     skipped: dict[str, int] = Field(default_factory=dict)
+    #: True when nothing was written: the figures are what would happen.
+    dry_run: bool = False
+    #: The first products whose band changes, for the preview table.
+    changes: list[BulkChangeOut] = Field(default_factory=list)
+    changes_total: int = 0
 
 
 class SaleCountsOut(BaseModel):

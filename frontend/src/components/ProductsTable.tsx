@@ -8,6 +8,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Download,
+  Layers,
   Loader2,
   Package,
   PackagePlus,
@@ -197,7 +198,11 @@ export function ProductsTable({ data, cities, categories, filters, status, feedU
         </label>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-[auto_minmax(0,1.6fr)_repeat(4,minmax(0,1fr))] lg:items-end">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-[auto_auto_minmax(0,1.6fr)_repeat(4,minmax(0,1fr))] lg:items-end">
+        <button type="button" onClick={() => setTools(true)}
+          className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700">
+          <Layers className="size-4" />Массовые настройки
+        </button>
         <div className="relative">
           <button type="button" aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(!menu)}
             className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg bg-[#345c7f] px-4 text-sm font-medium text-white hover:bg-[#2b4d6b]">
@@ -312,7 +317,6 @@ export function ProductsTable({ data, cities, categories, filters, status, feedU
             {saleBusy && <Loader2 className="size-4 animate-spin" />}{allSelectedOffSale ? "Вернуть в продажу" : "Снять с продажи"}
           </button>
           <button type="button" onClick={() => setTools(true)} className="min-h-10 rounded-lg border border-slate-300 px-3 text-sm font-medium text-slate-800 hover:bg-slate-50">Массовые настройки</button>
-          <button type="button" onClick={() => router.push(`/strategies?bulk=${selectedRuleIds.join(",")}`)} className="min-h-10 px-2 text-sm text-[#345c7f] underline-offset-2 hover:underline">Правила</button>
           <button type="button" aria-label="Снять выделение" onClick={() => setSelected(new Set())} className="flex size-9 items-center justify-center rounded-full border border-slate-300 text-slate-500 hover:bg-slate-50"><X className="size-4" /></button>
         </div>
       )}
@@ -321,6 +325,7 @@ export function ProductsTable({ data, cities, categories, filters, status, feedU
 
       {tools && <BulkToolsDialog
         skus={selectedProducts.map(product => product.sku)}
+        categories={categories}
         onClose={() => setTools(false)} />}
 
       {historyOf && (
