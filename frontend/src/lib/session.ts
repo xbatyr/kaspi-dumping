@@ -37,9 +37,12 @@ export async function validSession(value: string | undefined): Promise<boolean> 
 }
 
 export function safeDestination(value: string | null): string {
-  return value?.startsWith("/") && !value.startsWith("//") && !value.startsWith("/\\")
-    ? value
-    : "/";
+  if (!value?.startsWith("/") || value.startsWith("//") || /[\u0000-\u001f\u007f\\]/.test(value)) return "/";
+  try {
+    return new URL(value, "https://local.invalid").origin === "https://local.invalid" ? value : "/";
+  } catch {
+    return "/";
+  }
 }
 
 export function sameOrigin(request: Request): boolean {
