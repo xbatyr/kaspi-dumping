@@ -21,7 +21,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         <form action="/auth/logout" method="post"><button title="Выйти" aria-label="Выйти из панели" className="inline-flex min-h-10 items-center gap-1 rounded-lg border border-slate-200 px-3 text-sm text-slate-600 hover:bg-slate-50"><LogOut className="size-4" /><span className="hidden sm:inline">Выйти</span></button></form>
       </div>
     </header>
-    <main className="mx-auto max-w-7xl px-4 pt-4 pb-24 sm:px-6 md:py-6">{children}</main>
     <SetupGuide />
+    <main className="mx-auto max-w-7xl px-4 pt-4 pb-24 sm:px-6 md:py-6">{children}</main>
   </>;
 }

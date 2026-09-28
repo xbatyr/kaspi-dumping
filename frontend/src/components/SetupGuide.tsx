@@ -86,7 +86,7 @@ export function SetupGuide() {
 
   if (state.dismissed) {
     return <button type="button" onClick={() => update({ dismissed: false, collapsed: false })}
-      className="fixed right-4 bottom-20 z-30 inline-flex min-h-10 items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 text-xs font-medium text-slate-600 shadow-md hover:bg-slate-50 md:bottom-6">
+      className="relative mx-4 mt-3 inline-flex min-h-10 items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 text-xs font-medium text-slate-600 shadow-md hover:bg-slate-50 md:fixed md:right-4 md:bottom-6 md:mx-0 md:mt-0">
       <GraduationCap className="size-4" />Обучение
     </button>;
   }
@@ -99,7 +99,7 @@ export function SetupGuide() {
     setActive(null);
   }
 
-  return <aside aria-label="Обучение Kaspi-Бот" className={`fixed right-4 bottom-20 z-30 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_12px_40px_-12px_rgba(15,23,42,0.35)] md:bottom-6 ${state.collapsed ? "w-auto" : "w-[min(20rem,calc(100vw-2rem))]"}`}>
+  return <aside aria-label="Обучение Kaspi-Бот" className={`relative mx-4 mt-3 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_12px_40px_-12px_rgba(15,23,42,0.35)] md:fixed md:right-4 md:bottom-6 md:z-30 md:mx-0 md:mt-0 ${state.collapsed ? "w-fit" : "w-[calc(100%-2rem)] md:w-[min(20rem,calc(100vw-2rem))]"}`}>
     <div className="bg-slate-50 px-4 pt-3 pb-3">
       <div className="flex items-start justify-between gap-2">
         <button type="button" aria-expanded={!state.collapsed} onClick={() => update({ collapsed: !state.collapsed })}
