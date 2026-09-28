@@ -3,6 +3,7 @@ import { AlertTriangle, Store } from "lucide-react";
 
 import { ProductsTable } from "@/components/ProductsTable";
 import { ApiError, feedUrl, fetchCategories, fetchCities, fetchRules, fetchStatus } from "@/lib/api";
+import { DEFAULT_SALE_FILTER } from "@/lib/filters";
 import type { CatalogFilters, Category, City, RuleList, Status } from "@/lib/types";
 
 const PAGE_SIZE = 50;
@@ -39,8 +40,9 @@ export default async function DashboardPage({
     tools?: string;
   }>;
 }) {
-  const { q = "", offset = "0", bot = "all", sale = "all", category = "", sort = "sku", tools } =
-    await searchParams;
+  const {
+    q = "", offset = "0", bot = "all", sale = DEFAULT_SALE_FILTER, category = "", sort = "sku", tools,
+  } = await searchParams;
   const filters: CatalogFilters = { q, bot, sale, category, sort };
   const result = await load(filters, Number(offset) || 0);
 

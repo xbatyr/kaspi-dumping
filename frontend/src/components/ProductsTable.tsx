@@ -24,6 +24,7 @@ import { BulkToolsDialog } from "@/components/BulkToolsDialog";
 import { HistoryDialog } from "@/components/HistoryDialog";
 import { StatusPanel } from "@/components/StatusPanel";
 import { linkKaspiCard, setOnSale } from "@/lib/client";
+import { DEFAULT_SALE_FILTER } from "@/lib/filters";
 import type { CatalogFilters, Category, City, ProductRules, Rule, RuleList, Status } from "@/lib/types";
 
 const DEFAULT_CITY = "750000000";
@@ -86,7 +87,8 @@ export function ProductsTable({ data, cities, categories, filters, status, feedU
     const merged = { ...filters, ...changes };
     if (merged.q) next.set("q", merged.q);
     if (merged.bot !== "all") next.set("bot", merged.bot);
-    if (merged.sale !== "all") next.set("sale", merged.sale);
+    // The default is left out of the URL, so «Все товары» has to be spelled out.
+    if (merged.sale !== DEFAULT_SALE_FILTER) next.set("sale", merged.sale);
     if (merged.category) next.set("category", merged.category);
     if (merged.sort !== "sku") next.set("sort", merged.sort);
     if (changes.offset) next.set("offset", String(Math.max(0, changes.offset)));
@@ -241,9 +243,9 @@ export function ProductsTable({ data, cities, categories, filters, status, feedU
         </form>
         <label className="min-w-0 text-xs text-slate-600">Фильтры
           <select className="catalog-input mt-1" value={sale} onChange={event => go({ sale: event.target.value })}>
+            <option value="on">В наличии ({data.sale_counts.on})</option>
             <option value="all">Все товары ({data.sale_counts.all})</option>
-            <option value="on">На продаже ({data.sale_counts.on})</option>
-            <option value="off">Сняты с продажи ({data.sale_counts.off})</option>
+            <option value="off">Нет в наличии / сняты ({data.sale_counts.off})</option>
           </select>
         </label>
         <label className="min-w-0 text-xs text-slate-600">Сортировать по
@@ -290,8 +292,15 @@ export function ProductsTable({ data, cities, categories, filters, status, feedU
           <p className="mt-1 text-sm text-slate-500">
             {search
               ? "Поиск ничего не нашёл — попробуйте другой запрос."
-              : "Откройте «Инструменты» → «Добавить товары» — по одному или списком из таблицы."}
+              : sale !== "all" && data.sale_counts.all > 0
+                ? "С этим фильтром ничего нет — остальные товары в «Все товары»."
+                : "Откройте «Инструменты» → «Добавить товары» — по одному или списком из таблицы."}
           </p>
+          {!search && sale !== "all" && data.sale_counts.all > 0 && (
+            <button type="button" onClick={() => go({ sale: "all" })} className="mt-3 min-h-10 rounded-lg border border-slate-300 px-4 text-sm font-medium text-[#345c7f] hover:bg-slate-50">
+              Показать все товары ({data.sale_counts.all})
+            </button>
+          )}
         </div>
       ) : (
         <>
