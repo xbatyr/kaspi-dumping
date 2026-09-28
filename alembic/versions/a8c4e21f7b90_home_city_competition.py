@@ -1,7 +1,7 @@
 """home city competition
 
 Revision ID: a8c4e21f7b90
-Revises: 95f28d4fad05
+Revises: aa31bfc95320
 Create Date: 2026-09-27 18:00:00.000000
 """
 
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = 'a8c4e21f7b90'
-down_revision: str | None = '95f28d4fad05'
+down_revision: str | None = 'aa31bfc95320'
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

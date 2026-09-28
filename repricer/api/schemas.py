@@ -271,6 +271,7 @@ class ProductRulesOut(BaseModel):
     sku: str
     title: str
     kaspi_product_id: str
+    image_url: str | None = None
     brand: str | None
     base_price: MoneyOut | None
     purchase_price: MoneyOut | None = None
@@ -628,6 +629,7 @@ class ProductOut(BaseModel):
     sku: str
     title: str
     kaspi_product_id: str
+    image_url: str | None = None
     brand: str | None
     base_price: MoneyOut | None
     purchase_price: MoneyOut | None = None
@@ -754,6 +756,7 @@ class ProductCardOut(BaseModel):
     rating: float | None
     reviews_count: int
     link: str
+    image_url: str | None = None
 
 
 class CityOut(BaseModel):

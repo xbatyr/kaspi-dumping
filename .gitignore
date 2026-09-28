@@ -7,3 +7,5 @@ feeds/
 .mypy_cache/
 .pytest_cache/
 .playwright-cli/
+# macOS Finder metadata
+.DS_Store

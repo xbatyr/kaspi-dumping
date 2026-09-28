@@ -60,6 +60,7 @@ class ProductCard:
     rating: float | None
     reviews_count: int
     link: str
+    image_url: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,9 +187,20 @@ def parse_search_results(payload: object, *, limit: int = 12) -> list[ProductCar
                 rating=_optional(raw, "rating", _parse_rating),
                 reviews_count=_optional(raw, "reviewsQuantity", _parse_count) or 0,
                 link=_optional(raw, "shopLink", _parse_text) or f"/p/-{kaspi_id}/",
+                image_url=_preview_image(raw),
             )
         )
     return results
+
+
+def _preview_image(raw: Mapping[str, object]) -> str | None:
+    previews = raw.get("previewImages")
+    if not isinstance(previews, list) or not previews or not isinstance(previews[0], dict):
+        return None
+    image = previews[0].get("small")
+    if isinstance(image, str) and image.startswith("https://resources.cdn-kaspi.kz/img/"):
+        return image
+    return None
 
 
 def _optional(raw: Mapping[str, object], key: str, parse: Callable[[object], _T]) -> _T | None:
