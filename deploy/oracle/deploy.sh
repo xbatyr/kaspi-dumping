@@ -16,11 +16,13 @@ sudo docker compose up -d --no-build api worker bot web
 
 for attempt in $(seq 1 30); do
   status=$(curl -sS -o /dev/null -w '%{http_code}' https://kaspi-repricer.duckdns.org/ || true)
-  if [ "$status" = 401 ]; then
+  if [ "$status" = 307 ]; then
     break
   fi
   sleep 3
 done
-test "$status" = 401
+test "$status" = 307
+test "$(curl -sS -o /dev/null -w '%{http_code}' https://kaspi-repricer.duckdns.org/login)" = 200
+test "$(curl -sS -o /dev/null -w '%{http_code}' https://kaspi-repricer.duckdns.org/api/status)" = 401
 test "$(curl -sS -o /dev/null -w '%{http_code}' https://kaspi-repricer.duckdns.org/feed/kaspi.xml)" = 200
 sudo docker compose ps

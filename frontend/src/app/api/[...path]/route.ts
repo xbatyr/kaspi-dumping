@@ -1,4 +1,5 @@
 import type { NextRequest } from "next/server";
+import { sameOrigin } from "@/lib/session";
 
 /**
  * Forwards /api/* to FastAPI.
@@ -17,6 +18,9 @@ const API_URL = process.env.API_URL ?? "http://127.0.0.1:8000";
 const API_KEY = process.env.REPRICER_API_KEY ?? "";
 
 async function proxy(request: NextRequest, path: string[]): Promise<Response> {
+  if (request.method !== "GET" && request.method !== "HEAD" && !sameOrigin(request)) {
+    return Response.json({ detail: "Недопустимый источник" }, { status: 403 });
+  }
   const target = `${API_URL}/api/${path.join("/")}${request.nextUrl.search}`;
   const hasBody = request.method !== "GET" && request.method !== "HEAD";
 
