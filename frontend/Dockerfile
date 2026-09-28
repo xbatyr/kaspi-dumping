@@ -9,7 +9,7 @@ WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-RUN npm run build
+RUN NODE_OPTIONS=--max-old-space-size=384 npm run build -- --webpack
 
 FROM node:22-slim
 WORKDIR /app
