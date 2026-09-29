@@ -69,7 +69,7 @@ export function fetchRules(params: {
 }): Promise<RuleList> {
   const query = new URLSearchParams();
   if (params.bot) query.set("bot", params.bot);
-  if (params.sale && params.sale !== "all") query.set("sale", params.sale);
+  if (params.sale && params.sale !== "all") query.set("filter", params.sale);
   if (params.category) query.set("category", params.category);
   if (params.sort) query.set("sort", params.sort);
   if (params.search) query.set("search", params.search);

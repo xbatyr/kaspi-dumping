@@ -21,6 +21,7 @@ import {
 import { ProductCard } from "@/components/ProductCard";
 import { AddProductDialog } from "@/components/AddProductDialog";
 import { BulkToolsDialog } from "@/components/BulkToolsDialog";
+import { FilterMenu } from "@/components/FilterMenu";
 import { HistoryDialog } from "@/components/HistoryDialog";
 import { StatusPanel } from "@/components/StatusPanel";
 import { linkKaspiCard, setOnSale } from "@/lib/client";
@@ -243,13 +244,7 @@ export function ProductsTable({ data, cities, categories, filters, status, feedU
           </label>
           <button className="min-h-11 shrink-0 rounded-r-lg bg-[#345c7f] px-4 text-sm font-medium text-white hover:bg-[#2b4d6b]">Поиск</button>
         </form>
-        <label className="min-w-0 text-xs text-slate-600">Фильтры
-          <select className="catalog-input mt-1" value={sale} onChange={event => go({ sale: event.target.value })}>
-            <option value="on">В наличии ({data.sale_counts.on})</option>
-            <option value="all">Все товары ({data.sale_counts.all})</option>
-            <option value="off">Нет в наличии / сняты ({data.sale_counts.off})</option>
-          </select>
-        </label>
+        <FilterMenu value={sale} counts={data.filter_counts} onChange={value => go({ sale: value })} />
         <label className="min-w-0 text-xs text-slate-600">Сортировать по
           <select className="catalog-input mt-1" value={sort} onChange={event => go({ sort: event.target.value })}>
             <option value="sku">По умолчанию</option>

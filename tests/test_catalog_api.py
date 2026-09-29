@@ -424,6 +424,55 @@ def test_contradictory_or_impossible_limits_are_refused(
     assert client.put("/api/strategy/products/A/limits", json=payload).status_code == 422
 
 
+def _market(product: Product, *, position: int, offers: int, leader: int) -> None:
+    product.rules[0].market_snapshot = {
+        "position": position, "offer_count": offers, "leader_price": str(leader),
+    }
+
+
+def test_grouped_filter_menu_like_algatop(client: TestClient, session: Session) -> None:
+    first = add_product(session, "FIRST", purchase_price=50_000)
+    _market(first, position=1, offers=3, leader=100_000)
+    behind = add_product(session, "BEHIND")
+    # The leader sells at 85 000, below our 90 000 floor: first place is out of reach.
+    _market(behind, position=2, offers=2, leader=85_000)
+    alone = add_product(session, "ALONE")
+    _market(alone, position=1, offers=1, leader=100_000)
+    alone.availabilities[0].preorder_days = 5
+    manual = add_product(session, "MANUAL")
+    manual.auto_decrease = False
+    session.flush()
+
+    def picked(value: str) -> list[str]:
+        return sorted(skus(client.get("/api/rules", params={"filter": value})))
+
+    assert picked("first_place") == ["ALONE", "FIRST"]
+    assert picked("below_first") == ["BEHIND"]
+    assert picked("min_short") == ["BEHIND"]
+    assert picked("no_competitors") == ["ALONE"]
+    assert picked("with_competitors") == ["BEHIND", "FIRST"]
+    assert picked("with_cost") == ["FIRST"]
+    assert picked("with_preorder") == ["ALONE"]
+    assert picked("dumping_off") == ["MANUAL"]
+
+    counts = client.get("/api/rules").json()["filter_counts"]
+    assert (counts["all"], counts["on"], counts["first_place"], counts["no_cost"]) == (4, 4, 2, 3)
+    assert counts["with_min"] == 4 and counts["without_min"] == 0
+
+
+def test_filter_counts_follow_the_other_filters(client: TestClient, session: Session) -> None:
+    add_product(session, "PC", category="Системные блоки", purchase_price=1)
+    add_product(session, "CASE", category="Чехлы")
+
+    body = client.get(
+        "/api/rules", params={"category": "Системные блоки", "filter": "no_cost"}
+    ).json()
+
+    # The page is filtered; the menu counts are for the category, whatever is picked.
+    assert body["items"] == []
+    assert (body["filter_counts"]["all"], body["filter_counts"]["with_cost"]) == (1, 1)
+
+
 # --- Bulk tools ---------------------------------------------------------------
 
 

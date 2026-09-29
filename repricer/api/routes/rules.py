@@ -10,8 +10,9 @@ from sqlalchemy.orm import Session, selectinload
 
 from repricer.api.catalog_query import (
     bot_filter,
+    catalog_filter,
+    catalog_filters,
     category_filter,
-    on_sale,
     order_by,
     product_margins,
     sale_filter,
@@ -22,6 +23,7 @@ from repricer.api.security import ApiKeyGuard
 from repricer.api.schemas import (
     NO_CATEGORY,
     AvailabilityIn,
+    CatalogFilter,
     BulkToggleIn,
     BulkToggleOut,
     BulkRuleUpdateIn,
@@ -98,6 +100,9 @@ def list_rules(
     sale: Annotated[
         SaleFilter, Query(description="on: switched on and in stock; off: everything else.")
     ] = "all",
+    menu_filter: Annotated[
+        CatalogFilter, Query(alias="filter", description="One entry of the grouped filter menu.")
+    ] = "all",
     category: Annotated[
         str | None, Query(description=f"Exact category, or {NO_CATEGORY} for uncategorised.")
     ] = None,
@@ -106,16 +111,10 @@ def list_rules(
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> RuleListOut:
     shop = load_settings(session)
-    filters = [Product.merchant_id == merchant.merchant_id]
-    sale_predicate = sale_filter(sale)
-    filters += [
+    base = [Product.merchant_id == merchant.merchant_id]
+    base += [
         predicate
-        for predicate in (
-            bot_filter(bot),
-            sale_predicate,
-            category_filter(category),
-            search_filter(search),
-        )
+        for predicate in (bot_filter(bot), category_filter(category), search_filter(search))
         if predicate is not None
     ]
     rule_filters = []
@@ -127,18 +126,27 @@ def list_rules(
         rule_filters.append(RepricerRule.is_active == is_active)
     if rule_filters:
         # Keep only products that have a rule matching the filters.
-        filters.append(
+        base.append(
             Product.id.in_(select(RepricerRule.product_id).where(*rule_filters))
         )
+    filters = base + [
+        predicate
+        for predicate in (sale_filter(sale), catalog_filter(menu_filter))
+        if predicate is not None
+    ]
 
     total = session.scalar(select(func.count()).select_from(Product).where(*filters)) or 0
-    # The same filters minus the sale switch, in one pass over the products.
-    unsold_filters = [predicate for predicate in filters if predicate is not sale_predicate]
-    count_all, count_on = session.execute(
-        select(func.count(), func.count().filter(on_sale()))
+    # Every entry of the filter menu counted under the other filters, in one
+    # pass over the products: "На продаже (168)", "Без закуп. цены (150)".
+    menu = catalog_filters()
+    counted = session.execute(
+        select(func.count(), *(func.count().filter(predicate) for predicate in menu.values()))
         .select_from(Product)
-        .where(*unsold_filters)
+        .where(*base)
     ).one()
+    count_all = counted[0]
+    filter_counts = {"all": count_all, **dict(zip(menu, counted[1:], strict=True))}
+    count_on = filter_counts["on"]
     products = session.scalars(
         select(Product)
         .where(*filters)
@@ -191,6 +199,7 @@ def list_rules(
         limit=limit,
         offset=offset,
         sale_counts=SaleCountsOut(all=count_all, on=count_on, off=count_all - count_on),
+        filter_counts=filter_counts,
     )
 
 

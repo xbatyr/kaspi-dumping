@@ -156,6 +156,8 @@ export interface RuleList {
   offset: number;
   /** Products per sale-filter option, under every other filter. */
   sale_counts: { all: number; on: number; off: number };
+  /** Products per entry of the grouped filter menu, keyed by its value. */
+  filter_counts: Record<string, number>;
 }
 
 export interface City {

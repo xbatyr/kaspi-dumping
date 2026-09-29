@@ -19,11 +19,12 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import ColumnElement, Numeric, cast, func, or_
+from sqlalchemy import ColumnElement, Integer, Numeric, cast, func, or_
 from sqlalchemy.sql.elements import UnaryExpression
 
 from repricer.api.schemas import (
     NO_CATEGORY,
+    CatalogFilter,
     MarginOut,
     ProductMarginsOut,
     ProductSort,
@@ -57,6 +58,62 @@ def sale_filter(value: SaleFilter) -> ColumnElement[bool] | None:
     if value == "off":
         return ~on_sale()
     return None
+
+
+def _snapshot_int(key: str) -> ColumnElement[int]:
+    """A whole number the worker saved in the rule's market snapshot."""
+    return cast(RepricerRule.market_snapshot[key].astext, Integer)
+
+
+def catalog_filters() -> dict[str, ColumnElement[bool]]:
+    """Every entry of the grouped filter menu, as a predicate on Product.
+
+    Place and competition come from the market snapshot the worker keeps on
+    each rule, so a product the bot has not looked at yet is in neither group.
+    """
+    first = Product.rules.any(_snapshot_int("position") == 1)
+    rivals = Product.rules.any(_snapshot_int("offer_count") > 1)
+    has_min = Product.rules.any(
+        RepricerRule.min_percent.is_not(None) | (RepricerRule.max_price > RepricerRule.min_price)
+    )
+    has_max = Product.rules.any(
+        RepricerRule.max_percent.is_not(None) | (RepricerRule.max_price > RepricerRule.min_price)
+    )
+    preorder = Product.availabilities.any(ProductAvailability.preorder_days > 0)
+    return {
+        "on": on_sale(),
+        "off": ~on_sale(),
+        # «Демпинг» is the "Автоснижение" switch on each card.
+        "dumping_on": Product.auto_decrease.is_(True),
+        "dumping_off": Product.auto_decrease.is_(False),
+        "raise_on": Product.auto_increase.is_(True),
+        "raise_off": Product.auto_increase.is_(False),
+        # «Не хватает мин. цены»: someone sells below our floor, so first place
+        # is out of reach until the floor comes down.
+        "min_short": Product.rules.any(
+            RepricerRule.is_active
+            & (
+                cast(RepricerRule.market_snapshot["leader_price"].astext, Numeric)
+                < RepricerRule.min_price
+            )
+        ),
+        "with_min": has_min,
+        "without_min": ~has_min,
+        "with_max": has_max,
+        "without_max": ~has_max,
+        "first_place": first,
+        "below_first": Product.rules.any(_snapshot_int("position") > 1) & ~first,
+        "no_competitors": Product.rules.any(_snapshot_int("offer_count") <= 1) & ~rivals,
+        "with_competitors": rivals,
+        "no_cost": Product.purchase_price.is_(None),
+        "with_cost": Product.purchase_price.is_not(None),
+        "no_preorder": ~preorder,
+        "with_preorder": preorder,
+    }
+
+
+def catalog_filter(value: CatalogFilter) -> ColumnElement[bool] | None:
+    return None if value == "all" else catalog_filters()[value]
 
 
 def category_filter(value: str | None) -> ColumnElement[bool] | None:

@@ -59,6 +59,17 @@ ProductSort = Literal[
 ]
 #: "На продаже" means switched on *and* in stock somewhere; see Product.on_sale.
 SaleFilter = Literal["all", "on", "off"]
+#: The catalogue's grouped filter menu, one choice at a time, as in AlgaTop.
+#: Status (on/off) is the sale filter; the rest are described in catalog_query.
+CatalogFilter = Literal[
+    "all", "on", "off",
+    "dumping_on", "dumping_off", "raise_on", "raise_off",
+    "min_short", "with_min", "without_min", "with_max", "without_max",
+    "first_place", "below_first",
+    "no_competitors", "with_competitors",
+    "no_cost", "with_cost",
+    "no_preorder", "with_preorder",
+]
 #: Category value standing for "products without a category".
 NO_CATEGORY = "__none__"
 
@@ -443,6 +454,8 @@ class RuleListOut(BaseModel):
     offset: int
     #: Counted under every other filter, so the menu can say "На продаже (172)".
     sale_counts: SaleCountsOut = Field(default_factory=SaleCountsOut)
+    #: The same for every entry of the grouped filter menu, keyed by its value.
+    filter_counts: dict[str, int] = Field(default_factory=dict)
 
 
 class BulkSaleIn(BaseModel):
