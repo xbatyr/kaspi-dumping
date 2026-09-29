@@ -707,6 +707,9 @@ class AlgaTopImportOut(BaseModel):
     #: How many rows move the price in the feed, and how many the limits.
     prices_changed: int = 0
     limits_changed: int = 0
+    #: Existing products AlgaTop's «Статус» takes off sale or puts back on it.
+    switched_off: list[str] = Field(default_factory=list)
+    switched_on: list[str] = Field(default_factory=list)
     changes: list[AlgaTopChangeOut] = Field(default_factory=list)
     changes_total: int = 0
     preview: bool

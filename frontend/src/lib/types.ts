@@ -235,7 +235,8 @@ export interface ProductDraft {
   kaspi_product_id: string;
   brand: string | null;
   base_price: string | null;
-  is_active: boolean;
+  /** Left out on re-import, so a product taken off sale stays off. */
+  is_active?: boolean;
   availabilities: AvailabilityDraft[];
   rules: RuleDraftInline[];
 }
@@ -267,6 +268,8 @@ export interface AlgaTopImportResult {
   errors: { sku: string; reason: string }[];
   prices_changed: number;
   limits_changed: number;
+  switched_off: string[];
+  switched_on: string[];
   changes: AlgaTopChange[];
   changes_total: number;
   preview: boolean;

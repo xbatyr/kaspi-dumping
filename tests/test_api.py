@@ -969,6 +969,22 @@ def test_kaspi_xml_import_preserves_prices_and_can_be_linked(
     assert client.put(f"/api/rules/{rule_id}", json=automatic).status_code == 200
 
 
+def test_kaspi_xml_reimport_does_not_lower_the_own_price(
+    session: Session, client: TestClient
+) -> None:
+    # The export holds whatever price the bot last set; taking it as the own
+    # price would walk percent floors down with every import.
+    make_product(session, "ART-001", base_price=400000, cities={ALMATY: 362000})
+    xml = b"""<kaspi_catalog><merchantid>30123456</merchantid><offers><offer sku="ART-001">
+    <model>Example X1</model><brand>Example</brand><price>362000</price>
+    <availabilities><availability available="yes" storeId="PP1"/></availabilities>
+    </offer></offers></kaspi_catalog>"""
+
+    client.post("/api/products/import-xml", content=xml, headers={"Content-Type": "application/xml"})
+
+    assert client.get("/api/products/ART-001").json()["base_price"] == "400000"
+
+
 def test_kaspi_xml_import_rejects_wrong_merchant_and_duplicate_sku(
     session: Session, client: TestClient
 ) -> None:

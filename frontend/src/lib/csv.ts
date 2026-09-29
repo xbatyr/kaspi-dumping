@@ -128,7 +128,6 @@ export function parseCatalogCsv(text: string, cities: City[]): ParsedCatalog {
         kaspi_product_id: kaspiId,
         brand: value("brand") || null,
         base_price: basePrice,
-        is_active: true,
         availabilities: [],
         rules: [],
       } satisfies ProductDraft);

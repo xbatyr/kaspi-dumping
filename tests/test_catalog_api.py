@@ -544,6 +544,92 @@ def test_algatop_import_explains_an_unreadable_file(client: TestClient, session:
     assert "Артикул" in response.json()["detail"]
 
 
+# --- Nothing resumes a paused product behind the owner's back --------------
+
+ASTANA = "710000000"
+
+
+def _rule_states(client: TestClient, sku: str) -> dict[str, bool]:
+    return {rule["city_id"]: rule["is_active"] for rule in client.get(f"/api/products/{sku}").json()["rules"]}
+
+
+def test_saving_the_strategy_never_resumes_a_paused_product(
+    client: TestClient, session: Session
+) -> None:
+    paused = add_product(session, "PAUSED")
+    paused.rules[0].is_active = False
+    add_product(session, "RUNNING")
+    session.flush()
+
+    client.put("/api/strategy", json={"strategy": "beat_first", "city_ids": [ALMATY]})
+    assert _rule_states(client, "PAUSED") == {ALMATY: False}
+
+    # A new city joins: the running product gets it, the paused one stays off.
+    client.put("/api/strategy", json={"strategy": "beat_first", "city_ids": [ALMATY, ASTANA]})
+    assert _rule_states(client, "PAUSED") == {ALMATY: False, ASTANA: False}
+    assert _rule_states(client, "RUNNING") == {ALMATY: True, ASTANA: True}
+
+
+def test_bulk_limits_do_not_resume_a_paused_product(client: TestClient, session: Session) -> None:
+    client.put("/api/strategy", json={"strategy": "beat_first", "city_ids": [ALMATY]})
+    paused = add_product(session, "PAUSED")
+    paused.rules[0].is_active = False
+    session.flush()
+
+    client.post("/api/tools/bulk", json={"min_limit": {"mode": "percent", "value": "5"}})
+
+    rule = client.get("/api/products/PAUSED").json()["rules"][0]
+    assert (rule["min_price"], rule["is_active"]) == ("95000", False)
+
+
+def test_reimporting_a_price_list_keeps_what_the_owner_switched_off(
+    client: TestClient, session: Session
+) -> None:
+    product = add_product(session, "A")
+    product.is_active = False
+    product.rules[0].is_active = False
+    session.flush()
+
+    client.post("/api/products/import", json={"items": [{
+        "sku": "A", "title": "Товар", "kaspi_product_id": "102298404",
+        "rules": [{"city_id": ALMATY, "min_price": "91000", "max_price": "111000"}],
+    }]})
+
+    again = client.get("/api/products/A").json()
+    assert again["is_active"] is False
+    assert (again["rules"][0]["min_price"], again["rules"][0]["is_active"]) == ("91000", False)
+
+
+def test_algatop_zero_stock_never_takes_a_product_off_sale(
+    client: TestClient, session: Session
+) -> None:
+    # AlgaTop shows «Остаток: 0 шт.» for products it has on sale.
+    add_product(session, "A", stock=4)
+
+    client.post("/api/products/import-algatop",
+                content=_algatop_file(_algatop_row("A", 100_000, 90_000, 110_000, stock=0)),
+                headers={"Content-Type": "application/octet-stream"})
+
+    product = client.get("/api/products/A").json()
+    store = product["availabilities"][0]
+    assert (store["available"], store["stock_count"]) == (True, 4)
+    assert client.get("/api/rules").json()["sale_counts"]["on"] == 1
+
+
+def test_algatop_preview_names_the_products_it_takes_off_sale(
+    client: TestClient, session: Session
+) -> None:
+    add_product(session, "A")
+
+    preview = client.post(
+        "/api/products/import-algatop?preview=true",
+        content=_algatop_file(_algatop_row("A", 100_000, 90_000, 110_000, status="Снято с продажи")),
+        headers={"Content-Type": "application/octet-stream"},
+    ).json()
+
+    assert (preview["switched_off"], preview["switched_on"]) == (["A"], [])
+
+
 # --- Bulk tools ---------------------------------------------------------------
 
 

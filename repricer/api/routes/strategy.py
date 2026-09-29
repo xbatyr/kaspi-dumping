@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from decimal import Decimal
 
 from fastapi import APIRouter, HTTPException, status
@@ -55,8 +56,23 @@ def _apply(
     maximum: Decimal,
     step: int,
     percent: PercentLimits | None = None,
+    *,
+    previous_cities: Collection[str] | None = None,
 ) -> None:
+    """Put the shared strategy and this band on the product's rules.
+
+    The per-product «Бот» switch is the owner's and is never flipped here:
+    saving the strategy or new limits must not quietly resume a product that
+    was paused, nor everything after /stop_all. Only a rule for a city that
+    has just joined the strategy is switched on, and not on a paused product.
+    ``previous_cities`` are the cities the strategy covered before this change.
+    """
     assert settings.global_strategy is not None
+    competing = set(settings.global_city_ids if previous_cities is None else previous_cities)
+    # Before the first shared strategy every rule counts: a product switched off
+    # then is still switched off.
+    in_play = [rule for rule in product.rules if rule.city_id in competing] if competing else product.rules
+    paused = bool(in_play) and not any(rule.is_active for rule in in_play)
     by_city = {rule.city_id: rule for rule in product.rules}
     source_price = next((rule.current_price for rule in product.rules if rule.current_price is not None), None)
     for city_id in settings.global_city_ids:
@@ -64,6 +80,9 @@ def _apply(
         if rule is None:
             rule = RepricerRule(product_id=product.id, city_id=city_id, current_price=source_price)
             product.rules.append(rule)
+            rule.is_active = not paused
+        elif city_id not in competing:
+            rule.is_active = not paused
         rule.strategy = settings.global_strategy
         rule.step = step
         rule.target_position = settings.global_target_position
@@ -71,7 +90,6 @@ def _apply(
         rule.min_price = minimum
         rule.max_price = maximum
         _remember_percent(rule, percent)
-        rule.is_active = True
     for rule in product.rules:
         if rule.city_id not in settings.global_city_ids:
             rule.is_active = False
@@ -136,6 +154,7 @@ def put_global_strategy(
     payload: GlobalStrategyIn, session: SessionDep, merchant: MerchantDep
 ) -> GlobalStrategyOut:
     settings = load_settings(session)
+    previous_cities = list(settings.global_city_ids) if settings.global_strategy else []
     settings.global_strategy = payload.strategy
     settings.global_step = payload.step
     settings.global_target_position = payload.target_position if payload.strategy is PricingStrategy.TARGET_POSITION else None
@@ -149,7 +168,7 @@ def put_global_strategy(
         # Carry the percentages over: changing the strategy is not the merchant
         # retyping the limits, so they keep following the product's own price.
         _apply(product, settings, template.min_price, template.max_price, template.step,
-               template.percent_limits)
+               template.percent_limits, previous_cities=previous_cities)
     session.commit()
     return _out(settings, products)
 

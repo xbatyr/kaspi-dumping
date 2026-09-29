@@ -93,9 +93,10 @@ export function AddProductDialog({ cities, onClose }: { cities: City[]; onClose:
           kaspi_product_id: kaspiId.trim(),
           brand: brand.trim() || null,
           base_price: basePrice.trim() || null,
-          is_active: true,
+          // An empty stock field is "not counted", not zero: a zero would mark
+          // the offer as sold out in the price list.
           availabilities: storeId.trim()
-            ? [{ store_id: storeId.trim(), available: true, stock_count: Number(stock) || 0 }]
+            ? [{ store_id: storeId.trim(), available: true, stock_count: stock.trim() ? Number(stock) || 0 : null }]
             : [],
           rules: [],
         },

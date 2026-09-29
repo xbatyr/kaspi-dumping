@@ -67,6 +67,8 @@ export function AlgaTopImportDialog({ onClose }: { onClose: () => void }) {
           <li>Цена в XML {result.preview ? "изменится" : "изменилась"}: <b>{result.prices_changed}</b></li>
           <li>Мин./макс. {result.preview ? "изменятся" : "изменились"}: <b>{result.limits_changed}</b></li>
         </ul>
+        {result.switched_off.length > 0 && <p className="mt-2 font-medium text-rose-800">В AlgaTop сняты с продажи — {result.preview ? "снимутся" : "сняты"} и здесь ({result.switched_off.length}): {result.switched_off.slice(0, 20).join(", ")}{result.switched_off.length > 20 ? " …" : ""}</p>}
+        {result.switched_on.length > 0 && <p className="mt-2 text-emerald-900">В AlgaTop на продаже — {result.preview ? "включатся" : "включены"} и здесь ({result.switched_on.length}): {result.switched_on.slice(0, 20).join(", ")}{result.switched_on.length > 20 ? " …" : ""}</p>}
         {result.not_found_total > 0 && <p className="mt-2 text-amber-800">Нет в каталоге ({result.not_found_total}): {result.not_found.join(", ")}{result.not_found_total > result.not_found.length ? " …" : ""}</p>}
         {result.errors.length > 0 && <div className="mt-2 text-rose-800"><p>Строки с ошибками пропущены ({result.errors.length}):</p>
           <ul className="mt-1 max-h-32 list-disc overflow-y-auto pl-5 text-xs">{result.errors.map((item, index) => <li key={index}>{item.sku}: {item.reason}</li>)}</ul></div>}

@@ -88,7 +88,7 @@ def create_product(payload: ProductIn, session: SessionDep, merchant: MerchantDe
     if existing is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, f"{payload.sku} is already in the catalogue")
     product = Product(merchant_id=merchant.merchant_id, sku=payload.sku)
-    _apply(product, payload)
+    _apply(product, payload, is_new=True)
     session.add(product)
     session.commit()
     session.refresh(product)
@@ -105,7 +105,7 @@ def update_product(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             "the SKU is the product's identity here and cannot be renamed",
         )
-    _apply(product, payload)
+    _apply(product, payload, is_new=False)
     session.commit()
     session.refresh(product)
     return _product_out(product)
@@ -163,13 +163,14 @@ def import_products(payload: ImportIn, session: SessionDep, merchant: MerchantDe
             continue
         seen.add(item.sku)
         product = known.get(item.sku)
+        is_new = product is None
         if product is None:
             product = Product(merchant_id=merchant.merchant_id, sku=item.sku)
             session.add(product)
             created += 1
         else:
             updated += 1
-        _apply(product, item)
+        _apply(product, item, is_new=is_new)
 
     session.commit()
     logger.info(
@@ -290,6 +291,8 @@ def import_algatop(
     not_found: list[str] = []
     changes: list[AlgaTopChangeOut] = []
     prices_changed = limits_changed = 0
+    switched_off: list[str] = []
+    switched_on: list[str] = []
     for row in rows:
         product = known.get(row.sku)
         if product is None:
@@ -302,12 +305,17 @@ def import_algatop(
             session.add(product)
             known[row.sku] = product
             created.add(row.sku)
+        was_active = product.is_active if row.sku not in created else None
         try:
             change = _apply_algatop_row(product, row, shop)
         except ValueError as exc:
             errors.append(ImportError(sku=row.sku, reason=f"строка {row.line}: {exc}"))
             continue
         touched.add(row.sku)
+        if was_active is True and not product.is_active and row.sku not in switched_off:
+            switched_off.append(row.sku)
+        if was_active is False and product.is_active and row.sku not in switched_on:
+            switched_on.append(row.sku)
         if change.price_before != change.price_after:
             prices_changed += 1
         if (change.min_before, change.max_before) != (change.min_after, change.max_after):
@@ -336,6 +344,8 @@ def import_algatop(
         errors=errors[:100],
         prices_changed=prices_changed,
         limits_changed=limits_changed,
+        switched_off=switched_off,
+        switched_on=switched_on,
         changes=changes[:ALGATOP_PREVIEW_ROWS],
         changes_total=len(changes),
         preview=preview,
@@ -358,11 +368,13 @@ def _apply_algatop_row(product: Product, row: AlgaTopRow, shop: ShopSettings) ->
     # AlgaTop's percentages are taken from the current price, so that is the
     # own price here too; the feed's <price> follows it as well.
     product.base_price = row.price
-    if (row.stock is not None or row.preorder_days is not None) and len(product.availabilities) == 1:
+    if len(product.availabilities) == 1:
         store = product.availabilities[0]
-        if row.stock is not None:
+        # AlgaTop shows «Остаток: 0 шт.» for products it has on sale, so a zero
+        # means "not tracked", not "sold out": it never takes a product off
+        # sale here, and whether a pickup point sells stays as it is.
+        if row.stock:
             store.stock_count = row.stock
-            store.available = row.stock > 0 or (row.preorder_days or 0) > 0
         if row.preorder_days is not None:
             store.preorder_days = row.preorder_days or None
 
@@ -411,9 +423,11 @@ def _apply_xml_offer(product: Product, offer: ImportedOffer) -> None:
             product.image_url = None
             product.image_checked_at = None
         product.kaspi_product_id = offer.kaspi_product_id
-    if offer.base_price is not None:
+    if offer.base_price is not None and product.base_price is None:
+        # Only a product without an own price takes the export's: for one the
+        # bot already prices, the export holds the bot's lowered price, and
+        # anchoring percent limits to it would walk the floor down every import.
         product.base_price = offer.base_price
-        # Limits entered as a percentage are re-derived from the new own price.
         product.refresh_percent_limits()
 
     existing_stores = {entry.store_id: entry for entry in product.availabilities}
@@ -444,7 +458,7 @@ def _apply_xml_offer(product: Product, offer: ImportedOffer) -> None:
             rule.current_price = price
 
 
-def _apply(product: Product, payload: ProductIn) -> None:
+def _apply(product: Product, payload: ProductIn, *, is_new: bool) -> None:
     product.title = payload.title
     if payload.kaspi_product_id or not product.kaspi_product_id:
         if product.kaspi_product_id != payload.kaspi_product_id:
@@ -457,7 +471,10 @@ def _apply(product: Product, payload: ProductIn) -> None:
         product.brand = payload.brand
     if payload.base_price is not None:
         product.base_price = payload.base_price
-    product.is_active = payload.is_active
+    # Re-sending a price list must not put back on sale what the owner took off:
+    # the switch only moves when the request actually says so.
+    if is_new or "is_active" in payload.model_fields_set:
+        product.is_active = payload.is_active
     # No stores at all means "not given" too, not "delete every store": a product
     # without one cannot be in the feed, so a re-import of prices alone would
     # otherwise take the whole catalogue off sale.
@@ -510,13 +527,16 @@ def _apply_rules(product: Product, rules: list[RuleInline]) -> None:
             rule = RepricerRule(city_id=wanted.city_id, strategy=wanted.strategy,
                                 min_price=wanted.min_price, max_price=wanted.max_price)
             product.rules.append(rule)
+            rule.is_active = wanted.is_active
+        elif "is_active" in wanted.model_fields_set:
+            # A paused rule stays paused unless the row says otherwise.
+            rule.is_active = wanted.is_active
         rule.strategy = wanted.strategy
         # Limits sent in tenge are exactly those limits, so a changed one drops
         # the percentage the rule carried; an unchanged one keeps it.
         rule.set_limits_in_tenge(min_price=wanted.min_price, max_price=wanted.max_price)
         rule.step = wanted.step
         rule.target_position = wanted.target_position
-        rule.is_active = wanted.is_active
 
 
 def _product_out(product: Product) -> ProductOut:
