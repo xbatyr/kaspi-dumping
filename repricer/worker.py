@@ -88,6 +88,8 @@ class RuleSnapshot:
     config: PricingConfig
     #: Where we stood after the last price change; None when there is no history.
     last_position: int | None = None
+    #: The shop's «Не демпинговать под межгород».
+    ignore_intercity: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -348,6 +350,7 @@ class RepricingWorker:
                         if (change := changes.get((rule.product_id, rule.city_id)))
                         else None
                     ),
+                    ignore_intercity=bool(shop and shop.ignore_intercity_rivals),
                 )
             )
         return snapshots
@@ -392,8 +395,13 @@ class RepricingWorker:
                     snapshot.sku,
                     snapshot.city_id,
                 )
+            rivals = offers
+            if snapshot.ignore_intercity and own_offer is not None and own_offer.intercity is False:
+                # We deliver in the buyer's city; a store shipping from another
+                # city is days slower, so the price is not cut under it.
+                rivals = [offer for offer in offers if offer.intercity is not True]
             competitors = [
-                CompetitorOffer(offer.merchant_id, offer.price, offer.rating) for offer in offers
+                CompetitorOffer(offer.merchant_id, offer.price, offer.rating) for offer in rivals
             ]
             # Work from the price shoppers see, as AlgaTop does. The price in our
             # own feed can be stale (another tool or the cabinet changed it, or

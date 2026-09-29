@@ -76,6 +76,8 @@ class Offer:
     kaspi_delivery: bool
     #: Kaspi's delivery bucket: EXPRESS, TODAY, TOMORROW, TILL_2_DAYS, ...
     delivery_duration: str | None
+    #: «Доставка межгород»: shipped from another city. None when Kaspi did not say.
+    intercity: bool | None = None
 
 
 class KaspiError(Exception):
@@ -160,7 +162,24 @@ def parse_offer(raw: object) -> Offer:
         reviews_count=_optional(raw, "merchantReviewsQuantity", _parse_count) or 0,
         kaspi_delivery=_optional(raw, "kaspiDelivery", _parse_bool) or False,
         delivery_duration=_optional(raw, "deliveryDuration", _parse_text),
+        intercity=_intercity(raw.get("deliveryOptions")),
     )
+
+
+def _intercity(options: object) -> bool | None:
+    """Whether the seller ships from another city, from ``deliveryOptions``.
+
+    Kaspi flags each way of delivering (TO_DOOR, PICKUP, ...) with
+    ``interCity``; the offer is intercity only if every flagged way is.
+    """
+    if not isinstance(options, dict):
+        return None
+    flags = [
+        option["interCity"]
+        for option in options.values()
+        if isinstance(option, dict) and isinstance(option.get("interCity"), bool)
+    ]
+    return all(flags) if flags else None
 
 
 def parse_search_results(payload: object, *, limit: int = 12) -> list[ProductCard]:

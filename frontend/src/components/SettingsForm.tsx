@@ -26,6 +26,7 @@ export function SettingsForm({ settings }: { settings: Settings }) {
   const [delivery, setDelivery] = useState(String(Number(settings.delivery_cost)));
   const [homeCity, setHomeCity] = useState(settings.home_city_id);
   const [homeCityOnly, setHomeCityOnly] = useState(settings.compete_home_city_only);
+  const [ignoreIntercity, setIgnoreIntercity] = useState(settings.ignore_intercity_rivals);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -55,6 +56,7 @@ export function SettingsForm({ settings }: { settings: Settings }) {
         delivery_cost: delivery.replace(",", ".") || "0",
         home_city_id: homeCity,
         compete_home_city_only: homeCityOnly,
+        ignore_intercity_rivals: ignoreIntercity,
       });
       setSaved(true);
       router.refresh();
@@ -141,6 +143,23 @@ export function SettingsForm({ settings }: { settings: Settings }) {
             </span>
             <span className="block text-xs text-slate-500">
               Бот меняет цену только в выбранном городе, в остальных — ваша базовая цена.
+            </span>
+          </span>
+        </label>
+        <label className="flex cursor-pointer items-center gap-3 rounded-lg border border-slate-200 p-3">
+          <input
+            type="checkbox"
+            checked={ignoreIntercity}
+            onChange={(event) => setIgnoreIntercity(event.target.checked)}
+            className="size-4 cursor-pointer accent-slate-900"
+          />
+          <span>
+            <span className="block text-sm font-medium text-slate-900">
+              Не демпинговать под продавцов с доставкой межгород
+            </span>
+            <span className="block text-xs text-slate-500">
+              Если у вас доставка по городу, а конкурент везёт из другого города (несколько дней),
+              бот не снижает цену под него и сравнивает вас только с местными продавцами.
             </span>
           </span>
         </label>

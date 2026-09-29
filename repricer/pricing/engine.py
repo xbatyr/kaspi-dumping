@@ -34,7 +34,9 @@ class PricingEngine:
       5. If that lands below ``min_price``, first place is out of reach («не
          хватает мин. цены»): keep the current price. Dropping to the floor
          would cost margin and still not win, and chasing a lower place would
-         swing the price for nothing.
+         swing the price for nothing. With raising allowed, the price moves up
+         to just under the store behind us, which keeps our place and wins
+         back margin; with nobody behind (two sellers), it stays put.
       6. Cap at ``max_price``; a current price outside the bounds is brought
          back inside them.
 
@@ -123,8 +125,14 @@ class PricingEngine:
             return decide(hold(), DecisionReason.STRATEGY_TARGET, None)
         if target >= config.floor_price:
             return decide(target, DecisionReason.STRATEGY_TARGET, reference)
-        # The store to beat sells below our floor. Stay where we are.
-        return decide(hold(), DecisionReason.MIN_PRICE_SHORT, reference)
+        # The store to beat sells below our floor. Stay where we are, or with
+        # raising allowed sit just under whoever comes after us.
+        held = hold()
+        behind = next((offer for offer in competitors if offer.price > held), None)
+        if config.auto_increase and behind is not None:
+            pegged = min(max(_price_to_get_ahead(config, behind, own_rating), held), config.ceiling_price)
+            return decide(pegged, DecisionReason.MIN_PRICE_SHORT, behind)
+        return decide(held, DecisionReason.MIN_PRICE_SHORT, reference)
 
 
 def _rank_competitors(

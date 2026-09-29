@@ -732,6 +732,7 @@ class SettingsOut(BaseModel):
     delivery_cost: MoneyOut
     home_city_id: str
     compete_home_city_only: bool
+    ignore_intercity_rivals: bool
 
 
 class SettingsIn(BaseModel):
@@ -756,6 +757,8 @@ class SettingsIn(BaseModel):
     home_city_id: str = Field(default=DEFAULT_CITY_ID, pattern=r"^\d{1,16}$")
     #: Reprice the home city only; other cities sell at the product's own price.
     compete_home_city_only: bool = False
+    #: Do not undercut stores that ship from another city when ours is local.
+    ignore_intercity_rivals: bool = False
 
     @model_validator(mode="after")
     def tidy(self) -> Self:

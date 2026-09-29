@@ -212,6 +212,10 @@ class ShopSettings(TimestampMixin, Base):
     #: alone, and the feed sells every other city at the product's own price, so
     #: a price cut at home never spreads to cities the shop hardly ships to.
     compete_home_city_only: Mapped[bool] = mapped_column(server_default=false())
+    #: «Не демпинговать под межгород»: when our own delivery is local, stores
+    #: shipping from another city are left out of the competition, so the bot
+    #: does not cut the price under a rival who is days slower.
+    ignore_intercity_rivals: Mapped[bool] = mapped_column(server_default=false())
     # Defaults of the margin calculator. A product may override the last two.
     #: Retail tax on turnover; 3% in Kazakhstan.
     tax_percent: Mapped[Decimal] = mapped_column(server_default=text("3"))
@@ -236,6 +240,7 @@ class ShopSettings(TimestampMixin, Base):
         kwargs.setdefault("global_city_ids", [])
         kwargs.setdefault("home_city_id", DEFAULT_CITY_ID)
         kwargs.setdefault("compete_home_city_only", False)
+        kwargs.setdefault("ignore_intercity_rivals", False)
         kwargs.setdefault("tax_percent", DEFAULT_TAX_PERCENT)
         kwargs.setdefault("commission_percent", Decimal(0))
         kwargs.setdefault("delivery_cost", Decimal(0))

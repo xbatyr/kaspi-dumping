@@ -42,6 +42,7 @@ def update_settings(payload: SettingsIn, session: SessionDep) -> SettingsOut:
     settings.delivery_cost = payload.delivery_cost
     settings.home_city_id = payload.home_city_id
     settings.compete_home_city_only = payload.compete_home_city_only
+    settings.ignore_intercity_rivals = payload.ignore_intercity_rivals
     session.commit()
     session.refresh(settings)
     logger.info(
@@ -73,4 +74,5 @@ def _out(settings: ShopSettings) -> SettingsOut:
         delivery_cost=settings.delivery_cost,
         home_city_id=settings.home_city_id,
         compete_home_city_only=settings.compete_home_city_only,
+        ignore_intercity_rivals=settings.ignore_intercity_rivals,
     )

@@ -166,3 +166,22 @@ def test_unexpected_payload_shape_is_rejected(payload: object) -> None:
 @pytest.mark.parametrize("total", [None, -1, "20", True, 20.5])
 def test_invalid_total_is_ignored(total: object) -> None:
     assert parse_offers_page({"offers": [raw_offer()], "total": total}).total is None
+
+
+@pytest.mark.parametrize(
+    ("options", "expected"),
+    [
+        ({"TO_DOOR": {"interCity": True, "deliveryDays": 3}}, True),
+        ({"TO_DOOR": {"interCity": False, "deliveryDays": 0}}, False),
+        ({"TO_DOOR": {"interCity": True}, "PICKUP": {"interCity": False}}, False),
+        ({"TO_DOOR": {"deliveryDays": 1}}, None),
+        ("broken", None),
+    ],
+    ids=["intercity", "local", "one-local-option", "not-said", "malformed"],
+)
+def test_intercity_delivery_is_read_from_the_delivery_options(
+    options: object, expected: bool | None
+) -> None:
+    raw = {"merchantId": "30382550", "price": 580000.0, "deliveryOptions": options}
+
+    assert parse_offer(raw).intercity is expected

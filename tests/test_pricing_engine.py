@@ -303,23 +303,61 @@ def test_a_rival_below_the_floor_keeps_our_price() -> None:
     assert not decision.changed
 
 
+def no_raise(settings: PricingConfig) -> PricingConfig:
+    return replace(settings, auto_increase=False, raise_when_first=False)
+
+
 def test_out_of_reach_never_dumps_to_the_floor_or_chases_a_lower_place() -> None:
     # 141245039: three stores around 639 600, all under our 687 152 floor.
     offers = [offer("a", 639_638), offer("b", 639_645), offer("c", 640_005), offer("d", 999_999)]
 
-    decision = engine.evaluate(config(min_price=687_152, max_price=1_100_000), offers, Decimal(763_502))
+    decision = engine.evaluate(
+        no_raise(config(min_price=687_152, max_price=1_100_000)), offers, Decimal(763_502)
+    )
 
     assert decision.new_price == 763_502
     assert decision.reason is DecisionReason.MIN_PRICE_SHORT
 
 
-def test_out_of_reach_does_not_raise_towards_a_store_further_up() -> None:
+def test_out_of_reach_without_autoraise_keeps_the_price_whoever_is_behind() -> None:
     # 142549924: 876 000 went to 999 998 under the old fallback.
     offers = [offer("a", 683_999), offer("b", 684_000), offer("h", 999_999)]
 
-    decision = engine.evaluate(config(min_price=788_400, max_price=1_051_200), offers, Decimal(876_000))
+    decision = engine.evaluate(
+        no_raise(config(min_price=788_400, max_price=1_051_200)), offers, Decimal(876_000)
+    )
 
     assert decision.new_price == 876_000
+
+
+def test_out_of_reach_with_autoraise_sits_just_under_the_store_behind() -> None:
+    # Our place stays the same, and the gap to the next store is margin.
+    offers = [offer("a", 683_999), offer("b", 684_000), offer("h", 900_000)]
+
+    decision = engine.evaluate(config(min_price=788_400, max_price=1_051_200), offers, Decimal(876_000))
+
+    assert decision.new_price == 899_999
+    assert decision.reason is DecisionReason.MIN_PRICE_SHORT
+    assert decision.reference_offer == offer("h", 900_000)
+    assert decision.expected_position == 3
+
+
+def test_autoraise_under_the_store_behind_never_passes_max_price() -> None:
+    offers = [offer("a", 683_999), offer("h", 999_999)]
+
+    decision = engine.evaluate(config(min_price=788_400, max_price=900_000), offers, Decimal(876_000))
+
+    assert decision.new_price == 900_000
+
+
+def test_two_sellers_and_first_place_out_of_reach_stays_at_our_price() -> None:
+    # Nobody behind us: we are second at any price, so nothing is given away.
+    offers = [offer("veltrix", 580_000), offer(OWN, 675_600)]
+
+    decision = engine.evaluate(config(min_price=608_040, max_price=675_600), offers, Decimal(675_600))
+
+    assert decision.new_price == 675_600
+    assert decision.expected_position == 2
 
 
 def test_out_of_reach_still_brings_a_price_below_the_floor_up_to_it() -> None:
@@ -353,7 +391,7 @@ def test_target_position_out_of_reach_keeps_the_price() -> None:
     offers = [offer("a", 800), offer("b", 900), offer("c", 1000), offer("d", 2500)]
 
     decision = engine.evaluate(
-        config(TARGET, min_price=1500, target_position=2), offers, Decimal(2000)
+        no_raise(config(TARGET, min_price=1500, target_position=2)), offers, Decimal(2000)
     )
 
     assert decision.new_price == 2000

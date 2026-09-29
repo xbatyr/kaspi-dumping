@@ -1,6 +1,7 @@
 import threading
 import xml.etree.ElementTree as ET
 from collections.abc import Callable, Mapping
+from dataclasses import replace
 from decimal import Decimal
 from typing import Any, cast
 
@@ -9,6 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from repricer.db import PriceHistory, Product, ProductAvailability, RepricerRule
+from repricer.db.settings_store import load_settings
 from repricer.pricing import DecisionReason, PricingStrategy
 from repricer.scraper import KaspiClient, KaspiHTTPError, KaspiTransportError, Offer, ProxyPool
 from repricer.uploader import DatabaseCatalog, MerchantIdentity, SyncManager
@@ -278,6 +280,27 @@ def test_prices_from_what_kaspi_shows_and_then_holds_still(
     assert session.scalars(select(RepricerRule)).one().current_price == Decimal(369999)
     assert len(storage.published) == 1
     assert len(sink.messages) == 1
+
+
+@pytest.mark.parametrize(("ignore", "expected"), [(False, 369999), (True, 380000)])
+def test_intercity_rivals_can_be_left_out_of_the_competition(
+    session: Session, build_worker: Any, ignore: bool, expected: int
+) -> None:
+    # 164612291-like: the cheaper store ships from another city in five days,
+    # we deliver tomorrow in the buyer's city.
+    make_product(session, "IPH", IPHONE, cities={ALMATY: 380000})
+    shop = load_settings(session)
+    shop.ignore_intercity_rivals = ignore
+    session.flush()
+    ours = replace(competitor(MERCHANT.merchant_id, 380000), intercity=False)
+    far = replace(competitor("far", 370000), intercity=True)
+    worker, _, _ = build_worker(FakeKaspiClient({(IPHONE, ALMATY): [far, ours]}))
+
+    with worker:
+        worker.run_once()
+
+    session.expire_all()
+    assert session.scalars(select(RepricerRule)).one().current_price == Decimal(expected)
 
 
 def test_unchanged_price_is_reported_but_publishes_nothing(

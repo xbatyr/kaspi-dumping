@@ -333,6 +333,7 @@ export interface Settings {
   delivery_cost: Money;
   home_city_id: string;
   compete_home_city_only: boolean;
+  ignore_intercity_rivals: boolean;
 }
 
 export interface SettingsDraft {
@@ -349,6 +350,7 @@ export interface SettingsDraft {
   delivery_cost: string;
   home_city_id: string;
   compete_home_city_only: boolean;
+  ignore_intercity_rivals: boolean;
 }
 
 export interface KaspiCard {
