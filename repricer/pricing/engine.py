@@ -128,7 +128,16 @@ class PricingEngine:
         # The store to beat sells below our floor. Stay where we are, or with
         # raising allowed sit just under whoever comes after us.
         held = hold()
-        behind = next((offer for offer in competitors if offer.price > held), None)
+        # A store level with us that we out-rate is already behind us, and
+        # moving past it would give our place away.
+        behind = next(
+            (
+                offer
+                for offer in competitors
+                if offer.price > held or (offer.price == held and _outrates(own_rating, offer.rating))
+            ),
+            None,
+        )
         if config.auto_increase and behind is not None:
             pegged = min(max(_price_to_get_ahead(config, behind, own_rating), held), config.ceiling_price)
             return decide(pegged, DecisionReason.MIN_PRICE_SHORT, behind)

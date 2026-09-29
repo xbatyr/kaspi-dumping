@@ -342,6 +342,20 @@ def test_out_of_reach_with_autoraise_sits_just_under_the_store_behind() -> None:
     assert decision.expected_position == 3
 
 
+def test_autoraise_never_gives_up_a_place_held_on_rating() -> None:
+    # We are second at 1 000: level with B, but listed ahead of it on rating.
+    # Moving up to just under C would put B in front of us.
+    offers = [offer("a", 850), offer("b", 1_000, rating=4.0), offer("c", 1_200, rating=4.0)]
+
+    decision = engine.evaluate(
+        config(min_price=900, max_price=5_000, own_rating=4.8), offers, Decimal(1_000)
+    )
+
+    assert decision.new_price == 1_000
+    assert decision.expected_position == 2
+    assert decision.reason is DecisionReason.MIN_PRICE_SHORT
+
+
 def test_autoraise_under_the_store_behind_never_passes_max_price() -> None:
     offers = [offer("a", 683_999), offer("h", 999_999)]
 

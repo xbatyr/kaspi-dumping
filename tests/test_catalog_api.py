@@ -536,6 +536,63 @@ def test_algatop_import_creates_missing_products_in_the_only_store(
     assert new["rules"][0]["current_price"] == "50000"
 
 
+def test_algatop_limits_are_taken_in_tenge_even_when_they_match(
+    client: TestClient, session: Session
+) -> None:
+    # A floor of 10% under 100 000 is 90 000, and AlgaTop says 90 000 too. The
+    # import moves the own price to AlgaTop's 95 000; the floor must stay the
+    # 90 000 AlgaTop has, not become 10% under the new price.
+    add_product(session, "A", base_price=100_000).rules[0].min_percent = Decimal(10)
+    session.flush()
+
+    result = client.post("/api/products/import-algatop",
+                         content=_algatop_file(_algatop_row("A", 95_000, 90_000, 110_000)),
+                         headers={"Content-Type": "application/octet-stream"}).json()
+
+    rule = client.get("/api/products/A").json()["rules"][0]
+    assert (rule["min_price"], rule["min_percent"]) == ("90000", None)
+    assert result["changes"][0]["min_after"] == "90000"
+
+
+def test_algatop_preview_reports_the_limits_that_follow_the_new_price(
+    client: TestClient, session: Session
+) -> None:
+    # No Мин.цена in the row: the floor set as 10% follows the new own price,
+    # and the preview has to show where it lands.
+    add_product(session, "A", base_price=100_000).rules[0].min_percent = Decimal(10)
+    session.flush()
+
+    result = client.post("/api/products/import-algatop?preview=true",
+                         content=_algatop_file(_algatop_row("A", 95_000, 0, 110_000)),
+                         headers={"Content-Type": "application/octet-stream"}).json()
+
+    assert result["changes"][0]["min_after"] == "85500"
+
+
+def test_an_algatop_row_that_is_refused_changes_nothing(
+    client: TestClient, session: Session
+) -> None:
+    # Мин.цена 120 000 against the product's own 110 000 ceiling: the row is
+    # refused, and none of it (status, cost, price) may slip through.
+    add_product(session, "A", base_price=100_000)
+
+    result = client.post(
+        "/api/products/import-algatop",
+        content=_algatop_file(
+            _algatop_row("A", 95_000, 120_000, 0, cost=80_000, status="Снято с продажи"),
+            _algatop_row("NEW", 50_000, 60_000, 0),
+        ),
+        headers={"Content-Type": "application/octet-stream"},
+    ).json()
+
+    assert [error["sku"] for error in result["errors"]] == ["A", "NEW"]
+    product = client.get("/api/products/A").json()
+    assert (product["is_active"], product["base_price"], product["purchase_price"]) == (
+        True, "100000", None,
+    )
+    assert client.get("/api/products/NEW").status_code == 404
+
+
 def test_algatop_import_explains_an_unreadable_file(client: TestClient, session: Session) -> None:
     response = client.post("/api/products/import-algatop", content=b"not a table",
                            headers={"Content-Type": "application/octet-stream"})
@@ -568,6 +625,20 @@ def test_saving_the_strategy_never_resumes_a_paused_product(
     client.put("/api/strategy", json={"strategy": "beat_first", "city_ids": [ALMATY, ASTANA]})
     assert _rule_states(client, "PAUSED") == {ALMATY: False, ASTANA: False}
     assert _rule_states(client, "RUNNING") == {ALMATY: True, ASTANA: True}
+
+
+def test_the_shop_step_reaches_every_product_that_has_no_step_of_its_own(
+    client: TestClient, session: Session
+) -> None:
+    add_product(session, "DEFAULT")
+    add_product(session, "OWN").rules[0].step = 50
+    session.flush()
+    client.put("/api/strategy", json={"strategy": "beat_first", "step": 1, "city_ids": [ALMATY]})
+
+    client.put("/api/strategy", json={"strategy": "beat_first", "step": 10, "city_ids": [ALMATY]})
+
+    steps = {sku: client.get(f"/api/products/{sku}").json()["rules"][0]["step"] for sku in ("DEFAULT", "OWN")}
+    assert steps == {"DEFAULT": 10, "OWN": 50}
 
 
 def test_bulk_limits_do_not_resume_a_paused_product(client: TestClient, session: Session) -> None:
@@ -873,6 +944,20 @@ def test_bulk_raise_puts_todays_price_up_to_the_ceiling(
 
     assert result["prices_raised"] == 1
     assert client.get("/api/rules").json()["items"][0]["rules"][0]["current_price"] == "110000"
+
+
+def test_bulk_raise_goes_to_whole_tenge_under_a_fractional_ceiling(
+    client: TestClient, session: Session
+) -> None:
+    # Kaspi takes whole tenge; a ceiling typed with tiyn must not end up in the feed.
+    product = add_product(session, "A", base_price=100_000)
+    product.rules[0].max_price = Decimal("110000.50")
+    session.flush()
+
+    client.post("/api/tools/bulk", json={"raise_to_max": True})
+
+    assert client.get("/api/rules").json()["items"][0]["rules"][0]["current_price"] == "110000"
+    assert client.get("/feed/kaspi.xml").status_code == 200
 
 
 def test_bulk_stops_lowering_prices_of_products_that_are_not_on_sale(

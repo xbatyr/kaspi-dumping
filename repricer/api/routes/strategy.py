@@ -155,12 +155,21 @@ def put_global_strategy(
 ) -> GlobalStrategyOut:
     settings = load_settings(session)
     previous_cities = list(settings.global_city_ids) if settings.global_strategy else []
+    previous_step = settings.global_step
     settings.global_strategy = payload.strategy
     settings.global_step = payload.step
     settings.global_target_position = payload.target_position if payload.strategy is PricingStrategy.TARGET_POSITION else None
     settings.global_ignored_merchants = list(payload.ignored_merchants)
     settings.global_city_ids = list(payload.city_ids)
     products = _products(session, merchant)
+    if payload.step != previous_step:
+        # Every rule has a step, so "the product has no step of its own" can
+        # only mean it still carries the shop's: those follow the new one, and
+        # a step the owner set for a product stays.
+        for product in products:
+            for rule in product.rules:
+                if rule.step == previous_step:
+                    rule.step = payload.step
     for product in products:
         if not _configured(product):
             continue

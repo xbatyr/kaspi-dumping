@@ -305,6 +305,21 @@ def test_unfinished_product_is_left_out_without_freezing_the_shop(
     assert skus_in(feed) == ["SKU-1"]
 
 
+def test_a_price_kaspi_cannot_take_leaves_out_only_that_product(
+    session: Session, manager_factory: Any
+) -> None:
+    changed = make_product(session, "SKU-1", prices={ALMATY: 362000})
+    broken = make_product(session, "SKU-TIYN")
+    rule_of(broken).current_price = Decimal("362000.50")
+    session.flush()
+    manager, storage = manager_factory()
+
+    result = manager.sync(session, MERCHANT, [PriceUpdate(rule_of(changed), decision(361999))])
+
+    assert [item.sku for item in result.excluded] == ["SKU-TIYN"]
+    assert skus_in(storage.last_feed) == ["SKU-1"]
+
+
 def test_inactive_product_is_left_out(session: Session, manager_factory: Any) -> None:
     changed = make_product(session, "SKU-1")
     make_product(session, "SKU-OLD", active=False)
