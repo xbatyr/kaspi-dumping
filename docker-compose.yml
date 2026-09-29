@@ -1,9 +1,28 @@
 # Одна VM: база, API, воркер, Telegram, панель и публичный HTTPS через Caddy.
 # Секреты живут только в .env на сервере; наружу открыты только 80/443.
+#
+# Всё это должно помещаться в 1 ГБ RAM (Oracle Micro), поэтому база и процессы
+# поджаты: каталог на пару сотен товаров не нуждается в настройках по умолчанию.
 
 services:
   db:
     image: postgres:18-alpine
+    # Буферы на каталог из сотен строк, без JIT: экономит ~100 МБ против
+    # значений по умолчанию, которые рассчитаны на отдельный сервер базы.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=32MB
+      - -c
+      - work_mem=2MB
+      - -c
+      - maintenance_work_mem=16MB
+      - -c
+      - effective_cache_size=256MB
+      - -c
+      - max_connections=40
+      - -c
+      - jit=off
     environment:
       POSTGRES_DB: repricer
       POSTGRES_USER: repricer
@@ -23,6 +42,7 @@ services:
     build: .
     command: alembic upgrade head
     environment:
+      MALLOC_ARENA_MAX: "2"
       DATABASE_URL: postgresql+psycopg://repricer:${POSTGRES_PASSWORD}@db:5432/repricer
     depends_on:
       db:
@@ -34,6 +54,7 @@ services:
     build: .
     command: uvicorn repricer.api.app:app --host 0.0.0.0 --port 8000
     environment:
+      MALLOC_ARENA_MAX: "2"
       DATABASE_URL: postgresql+psycopg://repricer:${POSTGRES_PASSWORD}@db:5432/repricer
       REPRICER_API_KEY: ${REPRICER_API_KEY:?задайте REPRICER_API_KEY в .env}
     depends_on:
@@ -46,6 +67,7 @@ services:
     build: .
     command: repricer
     environment:
+      MALLOC_ARENA_MAX: "2"
       DATABASE_URL: postgresql+psycopg://repricer:${POSTGRES_PASSWORD}@db:5432/repricer
       FEED_DIR: /app/feeds
       FEED_BASE_URL: https://${SITE_DOMAIN:?задайте SITE_DOMAIN в .env}/feed
@@ -60,6 +82,7 @@ services:
     build: .
     command: repricer-bot
     environment:
+      MALLOC_ARENA_MAX: "2"
       DATABASE_URL: postgresql+psycopg://repricer:${POSTGRES_PASSWORD}@db:5432/repricer
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?задайте TELEGRAM_BOT_TOKEN в .env}
     depends_on:
@@ -70,6 +93,9 @@ services:
   web:
     build: ./frontend
     environment:
+      # Панель отдаёт несколько страниц одному владельцу: куча V8 не должна
+      # расти до сотен мегабайт на машине с 1 ГБ.
+      NODE_OPTIONS: --max-old-space-size=192
       API_URL: http://api:8000
       REPRICER_API_KEY: ${REPRICER_API_KEY}
       DASHBOARD_USER: ${DASHBOARD_USER:-owner}
