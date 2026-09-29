@@ -246,6 +246,32 @@ export interface ImportResult {
   errors: { sku: string; reason: string }[];
 }
 
+export interface AlgaTopChange {
+  sku: string;
+  title: string;
+  city_id: string;
+  price_before: Money | null;
+  price_after: Money;
+  min_before: Money | null;
+  min_after: Money;
+  max_before: Money | null;
+  max_after: Money;
+}
+
+export interface AlgaTopImportResult {
+  rows: number;
+  updated: number;
+  created: number;
+  not_found: string[];
+  not_found_total: number;
+  errors: { sku: string; reason: string }[];
+  prices_changed: number;
+  limits_changed: number;
+  changes: AlgaTopChange[];
+  changes_total: number;
+  preview: boolean;
+}
+
 export interface XmlImportResult {
   total: number;
   created: number;

@@ -16,6 +16,8 @@ from sqlalchemy.orm import Session, selectinload
 
 from repricer.api.deps import MerchantDep, SessionDep
 from repricer.api.schemas import (
+    AlgaTopChangeOut,
+    AlgaTopImportOut,
     AvailabilityIn,
     RuleInline,
     ImportError,
@@ -28,8 +30,10 @@ from repricer.api.schemas import (
     XmlImportResult,
 )
 from repricer.api.security import ApiKeyGuard
-from repricer.db.models import Product, ProductAvailability, RepricerRule
+from repricer.db.models import Product, ProductAvailability, RepricerRule, ShopSettings
+from repricer.db.settings_store import load_settings
 from repricer.uploader import MerchantIdentity
+from repricer.uploader.algatop_import import AlgaTopFileError, AlgaTopRow, parse_algatop
 from repricer.uploader.kaspi_import import ImportedOffer, parse_kaspi_xml
 from repricer.pricing import PricingStrategy
 
@@ -227,6 +231,175 @@ def import_kaspi_xml(
         _apply_xml_offer(product, offer)
     session.commit()
     return result
+
+
+#: How many before/after rows the AlgaTop preview returns.
+ALGATOP_PREVIEW_ROWS = 300
+
+
+@router.post("/import-algatop", summary="Preview or import AlgaTop's product export")
+def import_algatop(
+    content: Annotated[bytes, Body(media_type="application/octet-stream")],
+    session: SessionDep,
+    merchant: MerchantDep,
+    preview: bool = False,
+) -> AlgaTopImportOut:
+    """Carry every product over from AlgaTop exactly as it stands there.
+
+    Per product and city: the price in the feed becomes AlgaTop's current
+    price, and the min/max price, step, both directions, cost, status, stock
+    and pre-order are taken over. Limits come in as tenge, so they no longer
+    follow a percentage. Products missing from the catalogue are created when
+    the shop has a single pickup point to put them in.
+
+    Rows that cannot be read are reported and skipped; ``preview`` runs the
+    whole import and then undoes it, so the merchant sees what would change.
+    """
+    try:
+        rows, row_errors = parse_algatop(content)
+    except AlgaTopFileError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    errors = [ImportError(sku=item.sku or f"строка {item.line}", reason=f"строка {item.line}: {item.reason}")
+              for item in row_errors]
+    if not rows:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "в файле нет ни одной строки товара")
+
+    shop = load_settings(session)
+    known = {
+        product.sku: product
+        for product in session.scalars(
+            select(Product)
+            .where(Product.merchant_id == merchant.merchant_id,
+                   Product.sku.in_({row.sku for row in rows}))
+            .options(selectinload(Product.availabilities), selectinload(Product.rules))
+        )
+    }
+    stores = session.scalars(
+        select(ProductAvailability.store_id)
+        .join(Product, ProductAvailability.product_id == Product.id)
+        .where(Product.merchant_id == merchant.merchant_id)
+        .distinct()
+    ).all()
+    # A new product needs a pickup point to be in the feed; with one shop-wide
+    # store there is no doubt which one it is.
+    only_store = stores[0] if len(stores) == 1 else None
+
+    savepoint = session.begin_nested()
+    touched: set[str] = set()
+    created: set[str] = set()
+    not_found: list[str] = []
+    changes: list[AlgaTopChangeOut] = []
+    prices_changed = limits_changed = 0
+    for row in rows:
+        product = known.get(row.sku)
+        if product is None:
+            if only_store is None or not row.kaspi_product_id:
+                not_found.append(row.sku)
+                continue
+            product = Product(merchant_id=merchant.merchant_id, sku=row.sku,
+                              kaspi_product_id=row.kaspi_product_id, title=row.title or row.sku)
+            product.availabilities.append(ProductAvailability(store_id=only_store))
+            session.add(product)
+            known[row.sku] = product
+            created.add(row.sku)
+        try:
+            change = _apply_algatop_row(product, row, shop)
+        except ValueError as exc:
+            errors.append(ImportError(sku=row.sku, reason=f"строка {row.line}: {exc}"))
+            continue
+        touched.add(row.sku)
+        if change.price_before != change.price_after:
+            prices_changed += 1
+        if (change.min_before, change.max_before) != (change.min_after, change.max_after):
+            limits_changed += 1
+        if change.price_before != change.price_after or (
+            (change.min_before, change.max_before) != (change.min_after, change.max_after)
+        ):
+            changes.append(change)
+
+    session.flush()
+    if preview:
+        savepoint.rollback()
+    else:
+        savepoint.commit()
+        session.commit()
+        logger.info(
+            "merchant={}: AlgaTop import updated {} products, created {}, {} not found, {} errors",
+            merchant.merchant_id, len(touched - created), len(created), len(not_found), len(errors),
+        )
+    return AlgaTopImportOut(
+        rows=len(rows),
+        updated=len(touched - created),
+        created=len(created & touched),
+        not_found=not_found[:50],
+        not_found_total=len(not_found),
+        errors=errors[:100],
+        prices_changed=prices_changed,
+        limits_changed=limits_changed,
+        changes=changes[:ALGATOP_PREVIEW_ROWS],
+        changes_total=len(changes),
+        preview=preview,
+    )
+
+
+def _apply_algatop_row(product: Product, row: AlgaTopRow, shop: ShopSettings) -> AlgaTopChangeOut:
+    if row.kaspi_product_id:
+        product.kaspi_product_id = row.kaspi_product_id
+    if row.title and not product.title:
+        product.title = row.title
+    if row.published is not None:
+        product.is_active = row.published
+    if row.purchase_price is not None:
+        product.purchase_price = row.purchase_price
+    if row.auto_decrease is not None:
+        product.auto_decrease = row.auto_decrease
+    if row.auto_increase is not None:
+        product.auto_increase = row.auto_increase
+    # AlgaTop's percentages are taken from the current price, so that is the
+    # own price here too; the feed's <price> follows it as well.
+    product.base_price = row.price
+    if (row.stock is not None or row.preorder_days is not None) and len(product.availabilities) == 1:
+        store = product.availabilities[0]
+        if row.stock is not None:
+            store.stock_count = row.stock
+            store.available = row.stock > 0 or (row.preorder_days or 0) > 0
+        if row.preorder_days is not None:
+            store.preorder_days = row.preorder_days or None
+
+    rule = next((item for item in product.rules if item.city_id == row.city_id), None)
+    before = (rule.current_price, rule.min_price, rule.max_price) if rule else (None, None, None)
+    minimum = row.min_price or (rule.min_price if rule else row.price)
+    maximum = row.max_price or (rule.max_price if rule else row.price)
+    if minimum > maximum:
+        raise ValueError(f"мин. цена {minimum} выше макс. {maximum}")
+    if rule is None:
+        shared = shop.global_strategy if row.city_id in shop.global_city_ids else None
+        rule = RepricerRule(
+            city_id=row.city_id,
+            strategy=shared or PricingStrategy.MANUAL,
+            min_price=minimum,
+            max_price=maximum,
+            step=row.step or shop.global_step,
+            target_position=shop.global_target_position if shared else None,
+        )
+        product.rules.append(rule)
+    rule.set_limits_in_tenge(min_price=minimum, max_price=maximum)
+    if row.step is not None:
+        rule.step = row.step
+    rule.current_price = row.price
+    # Other cities set as a percentage follow the new own price.
+    product.refresh_percent_limits()
+    return AlgaTopChangeOut(
+        sku=product.sku,
+        title=product.title,
+        city_id=row.city_id,
+        price_before=before[0],
+        price_after=row.price,
+        min_before=before[1],
+        min_after=minimum,
+        max_before=before[2],
+        max_after=maximum,
+    )
 
 
 def _apply_xml_offer(product: Product, offer: ImportedOffer) -> None:

@@ -9,6 +9,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Download,
+  FileSpreadsheet,
   Layers,
   Loader2,
   Package,
@@ -20,6 +21,7 @@ import {
 
 import { ProductCard } from "@/components/ProductCard";
 import { AddProductDialog } from "@/components/AddProductDialog";
+import { AlgaTopImportDialog } from "@/components/AlgaTopImportDialog";
 import { BulkToolsDialog } from "@/components/BulkToolsDialog";
 import { FilterMenu } from "@/components/FilterMenu";
 import { HistoryDialog } from "@/components/HistoryDialog";
@@ -104,6 +106,7 @@ export function ProductsTable({ data, cities, categories, filters, status, feedU
     return mostUsed ?? (cities.some((item) => item.id === DEFAULT_CITY) ? DEFAULT_CITY : (cities[0]?.id ?? ""));
   });
   const [adding, setAdding] = useState(false);
+  const [algatop, setAlgatop] = useState(false);
   const [tools, setTools] = useState(openTools);
   const [menu, setMenu] = useState(false);
   const [saleBusy, setSaleBusy] = useState(false);
@@ -225,6 +228,7 @@ export function ProductsTable({ data, cities, categories, filters, status, feedU
           {menu && <div role="menu" className="absolute left-0 z-30 mt-1 w-64 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-lg">
             <button role="menuitem" type="button" onClick={() => { setMenu(false); setTools(true); }} className="flex min-h-11 w-full items-center gap-2 px-3 text-left text-sm hover:bg-slate-50"><SlidersHorizontal className="size-4 text-slate-400" />Массовые настройки</button>
             <button role="menuitem" type="button" onClick={() => { setMenu(false); setAdding(true); }} className="flex min-h-11 w-full items-center gap-2 px-3 text-left text-sm hover:bg-slate-50"><PackagePlus className="size-4 text-slate-400" />Добавить товары</button>
+            <button role="menuitem" type="button" onClick={() => { setMenu(false); setAlgatop(true); }} className="flex min-h-11 w-full items-center gap-2 px-3 text-left text-sm hover:bg-slate-50"><FileSpreadsheet className="size-4 text-slate-400" />Импорт из AlgaTop</button>
             <a role="menuitem" href={feedUrl} download="kaspi.xml" onClick={() => setMenu(false)} className="flex min-h-11 w-full items-center gap-2 px-3 text-sm text-slate-800 hover:bg-slate-50"><Download className="size-4 text-slate-400" />Скачать XML</a>
           </div>}
         </div>
@@ -336,6 +340,7 @@ export function ProductsTable({ data, cities, categories, filters, status, feedU
       )}
 
       {adding && <AddProductDialog cities={cities} onClose={() => setAdding(false)} />}
+      {algatop && <AlgaTopImportDialog onClose={() => setAlgatop(false)} />}
 
       {tools && <BulkToolsDialog
         skus={selectedProducts.map(product => product.sku)}

@@ -36,7 +36,8 @@ async function proxy(request: NextRequest, path: string[]): Promise<Response> {
         Accept: "application/json",
         "X-API-Key": API_KEY,
       },
-      body: hasBody ? await request.text() : undefined,
+      // Bytes, not text: an uploaded Excel file would not survive decoding.
+      body: hasBody ? await request.arrayBuffer() : undefined,
       cache: "no-store",
     });
   } catch {

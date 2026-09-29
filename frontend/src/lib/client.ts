@@ -2,6 +2,7 @@
  *  route handler forwards them to FastAPI with the API key attached. */
 
 import type {
+  AlgaTopImportResult,
   BulkRuleChanges,
   BulkTools,
   BulkToolsResult,
@@ -121,6 +122,17 @@ export async function importKaspiXml(
   );
   if (!response.ok) throw new Error(await errorMessage(response));
   return (await response.json()) as XmlImportResult;
+}
+
+/** AlgaTop's product export (.xlsx or .csv), sent as the file's bytes. */
+export async function importAlgaTop(file: File, preview: boolean): Promise<AlgaTopImportResult> {
+  const response = await fetch(`/api/products/import-algatop?preview=${preview}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/octet-stream" },
+    body: file,
+  });
+  if (!response.ok) throw new Error(await errorMessage(response));
+  return (await response.json()) as AlgaTopImportResult;
 }
 
 export async function linkKaspiCard(sku: string, cardId: string): Promise<void> {

@@ -682,6 +682,36 @@ class XmlImportResult(BaseModel):
     preview: bool
 
 
+class AlgaTopChangeOut(BaseModel):
+    """One product and city before and after the AlgaTop import."""
+
+    sku: str
+    title: str
+    city_id: str
+    price_before: MoneyOut | None
+    price_after: MoneyOut
+    min_before: MoneyOut | None
+    min_after: MoneyOut
+    max_before: MoneyOut | None
+    max_after: MoneyOut
+
+
+class AlgaTopImportOut(BaseModel):
+    rows: int
+    updated: int
+    created: int
+    #: Rows whose product is not in the catalogue and could not be created.
+    not_found: list[str] = Field(default_factory=list)
+    not_found_total: int = 0
+    errors: list[ImportError] = Field(default_factory=list)
+    #: How many rows move the price in the feed, and how many the limits.
+    prices_changed: int = 0
+    limits_changed: int = 0
+    changes: list[AlgaTopChangeOut] = Field(default_factory=list)
+    changes_total: int = 0
+    preview: bool
+
+
 class SettingsOut(BaseModel):
     """What the settings screen shows. The Telegram token comes back masked."""
 

@@ -473,6 +473,77 @@ def test_filter_counts_follow_the_other_filters(client: TestClient, session: Ses
     assert (body["filter_counts"]["all"], body["filter_counts"]["with_cost"]) == (1, 1)
 
 
+# --- Import from AlgaTop -----------------------------------------------------
+
+
+def _algatop_file(*rows: list[object]) -> bytes:
+    from tests.test_algatop_import import HEADER, xlsx
+
+    return xlsx(HEADER, *rows)
+
+
+def _algatop_row(sku: str, price: int, low: int, high: int, **extra: object) -> list[object]:
+    status = extra.get("status", "Опубликовано")
+    return [sku, extra.get("card", 102298404), "Товар", "", status, None, "Алматы", price, 0,
+            extra.get("cost", 0), 1, low, 0, high, extra.get("step", 2), 1, extra.get("stock", 3), 0]
+
+
+def test_algatop_import_carries_prices_and_limits_over(client: TestClient, session: Session) -> None:
+    add_product(session, "A", base_price=100_000)
+    # The bot's own feed price, which AlgaTop's current price must replace.
+    add_product(session, "B", base_price=100_000).rules[0].current_price = Decimal(90_000)
+    session.flush()
+    content = _algatop_file(
+        _algatop_row("A", 99_990, 95_000, 105_000, cost=80_000, step=5),
+        _algatop_row("B", 101_000, 96_000, 101_000, status="Снято с продажи"),
+        _algatop_row("GHOST", 5_000, 4_000, 6_000, card=""),
+    )
+
+    preview = client.post("/api/products/import-algatop?preview=true", content=content,
+                          headers={"Content-Type": "application/octet-stream"}).json()
+    assert (preview["preview"], preview["updated"], preview["prices_changed"]) == (True, 2, 2)
+    assert preview["not_found"] == ["GHOST"]
+    assert client.get("/api/products/A").json()["rules"][0]["current_price"] == "100000"
+
+    result = client.post("/api/products/import-algatop", content=content,
+                         headers={"Content-Type": "application/octet-stream"}).json()
+
+    assert (result["updated"], result["limits_changed"]) == (2, 2)
+    a = client.get("/api/products/A").json()
+    rule = a["rules"][0]
+    assert (rule["current_price"], rule["min_price"], rule["max_price"], rule["step"]) == (
+        "99990", "95000", "105000", 5,
+    )
+    assert (a["purchase_price"], a["auto_increase"], a["availabilities"][0]["stock_count"]) == (
+        "80000", False, 3,
+    )
+    b = client.get("/api/products/B").json()
+    assert (b["rules"][0]["current_price"], b["is_active"]) == ("101000", False)
+
+
+def test_algatop_import_creates_missing_products_in_the_only_store(
+    client: TestClient, session: Session
+) -> None:
+    add_product(session, "A")
+
+    result = client.post("/api/products/import-algatop",
+                         content=_algatop_file(_algatop_row("NEW", 50_000, 45_000, 55_000)),
+                         headers={"Content-Type": "application/octet-stream"}).json()
+
+    assert result["created"] == 1
+    new = client.get("/api/products/NEW").json()
+    assert [entry["store_id"] for entry in new["availabilities"]] == ["PP1"]
+    assert new["rules"][0]["current_price"] == "50000"
+
+
+def test_algatop_import_explains_an_unreadable_file(client: TestClient, session: Session) -> None:
+    response = client.post("/api/products/import-algatop", content=b"not a table",
+                           headers={"Content-Type": "application/octet-stream"})
+
+    assert response.status_code == 422
+    assert "Артикул" in response.json()["detail"]
+
+
 # --- Bulk tools ---------------------------------------------------------------
 
 
