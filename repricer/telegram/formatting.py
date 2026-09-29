@@ -38,15 +38,17 @@ def render_alert(alert: Alert) -> str:
     head = f"<b>{escape(alert.sku)}</b> · {escape(city(alert.city_id))}"
     if alert.kind is AlertKind.STOP_LOSS:
         lines = [
-            "🛑 <b>Достигнут стоп-лосс</b>",
+            "🛑 <b>Не хватает минимальной цены</b>",
             head,
-            f"Цена упёрлась в минимум: <b>{tenge(alert.price)}</b>",
         ]
         if alert.competitor_price is not None:
             who = escape(alert.competitor_name or "конкурент")
-            lines.append(f"Ниже нас: {who} — {tenge(alert.competitor_price)}")
-        lines.append(f"Наше место: {position(alert.position)}")
-        lines.append("<i>Опускаться дальше бот не будет.</i>")
+            lines.append(
+                f"{who} продаёт за {tenge(alert.competitor_price)} — ниже вашего минимума "
+                f"{tenge(alert.min_price)}"
+            )
+        lines.append(f"Цена оставлена: <b>{tenge(alert.price)}</b> · место {position(alert.position)}")
+        lines.append("<i>Бот не сбрасывает цену до минимума впустую. Чтобы бороться за первое место, снизьте минимум.</i>")
         return "\n".join(lines)
 
     who = escape(alert.competitor_name or "конкурент")

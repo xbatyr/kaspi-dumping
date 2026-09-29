@@ -255,9 +255,13 @@ def test_our_own_offer_is_not_treated_as_a_competitor(session: Session, build_wo
     assert sink.messages == []
 
 
-def test_pending_xml_price_in_first_place_does_not_spam(
+def test_prices_from_what_kaspi_shows_and_then_holds_still(
     session: Session, build_worker: Any
 ) -> None:
+    # The feed says 362 000, Kaspi still shows our 390 000 against a rival at
+    # 370 000. Like AlgaTop, the bot works from the price shoppers see: 369 999
+    # is all it takes to be first, so the deeper feed discount is not kept, and
+    # while Kaspi catches up the next pass changes nothing.
     make_product(session, "IPH", IPHONE, cities={ALMATY: 362000})
     client = FakeKaspiClient(
         {(IPHONE, ALMATY): [competitor(MERCHANT.merchant_id, 390000), competitor("rival", 370000)]}
@@ -269,10 +273,11 @@ def test_pending_xml_price_in_first_place_does_not_spam(
         first = worker.run_once()
         second = worker.run_once()
 
-    assert first.changed == second.changed == 0
-    assert session.scalars(select(RepricerRule)).one().current_price == Decimal(362000)
-    assert storage.published == []
-    assert sink.messages == []
+    assert (first.changed, second.changed) == (1, 0)
+    session.expire_all()
+    assert session.scalars(select(RepricerRule)).one().current_price == Decimal(369999)
+    assert len(storage.published) == 1
+    assert len(sink.messages) == 1
 
 
 def test_unchanged_price_is_reported_but_publishes_nothing(
@@ -650,7 +655,7 @@ def test_stop_loss_raises_one_alert_and_then_keeps_quiet(
         worker.run_once()
 
     assert len(sink.messages) == 1
-    assert "Достигнут стоп-лосс" in sink.messages[0]
+    assert "Не хватает минимальной цены" in sink.messages[0]
     assert "IPH" in sink.messages[0] and "300 000 ₸" in sink.messages[0]
 
 

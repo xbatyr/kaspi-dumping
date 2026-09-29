@@ -76,7 +76,7 @@ def test_each_city_is_tracked_apart() -> None:
 def test_stop_loss_message_names_the_floor_and_the_competitor() -> None:
     text = render_alert(alert())
 
-    assert "Достигнут стоп-лосс" in text
+    assert "Не хватает минимальной цены" in text
     assert "IPH13-128" in text
     assert "Алматы" in text
     assert "330 000 ₸" in text
@@ -113,7 +113,7 @@ def test_a_nameless_competitor_is_still_described() -> None:
 def test_a_stop_loss_without_competitor_data_omits_that_line() -> None:
     text = render_alert(alert(competitor_name=None, competitor_price=None))
 
-    assert "Достигнут стоп-лосс" in text
+    assert "Не хватает минимальной цены" in text
     assert "330 000 ₸" in text
     assert "Ниже нас" not in text
 

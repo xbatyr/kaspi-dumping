@@ -113,7 +113,9 @@ def daily_summary(session: Session, merchant_id: str, since: datetime) -> DailyS
     )
     stop_loss_hits = (
         session.scalar(
-            select(func.count()).select_from(history).where(history.c.reason == "pinned_to_min")
+            select(func.count())
+            .select_from(history)
+            .where(history.c.reason.in_(("pinned_to_min", "min_price_short")))
         )
         or 0
     )

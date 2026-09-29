@@ -9,7 +9,7 @@ from repricer.pricing.domain import (
     PricingDecision,
     PricingStrategy,
 )
-from repricer.pricing.engine import DEFAULT_FALLBACK_MAX_POSITION, PricingEngine
+from repricer.pricing.engine import PricingEngine
 from repricer.pricing.limits import (
     MAX_DISCOUNT_PERCENT,
     MAX_MARKUP_PERCENT,
@@ -30,7 +30,6 @@ from repricer.pricing.margin import (
 )
 
 __all__ = [
-    "DEFAULT_FALLBACK_MAX_POSITION",
     "DEFAULT_TAX_PERCENT",
     "MAX_DISCOUNT_PERCENT",
     "MAX_MARKUP_PERCENT",

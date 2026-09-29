@@ -385,7 +385,8 @@ class RepricingWorker:
                 # competitors" would jump to max_price, so nothing is changed.
                 return TaskOutcome(snapshot, skipped="Kaspi returned no offers")
             own_merchant_id = snapshot.config.own_merchant_id
-            if not any(offer.merchant_id == own_merchant_id for offer in offers):
+            own_offer = next((offer for offer in offers if offer.merchant_id == own_merchant_id), None)
+            if own_offer is None:
                 logger.warning(
                     "sku={} city={}: our own offer is not on the card; pricing against competitors only",
                     snapshot.sku,
@@ -394,9 +395,12 @@ class RepricingWorker:
             competitors = [
                 CompetitorOffer(offer.merchant_id, offer.price, offer.rating) for offer in offers
             ]
-            decision = self._engine.evaluate(
-                snapshot.config, competitors, current_price=snapshot.current_price
-            )
+            # Work from the price shoppers see, as AlgaTop does. The price in our
+            # own feed can be stale (another tool or the cabinet changed it, or
+            # Kaspi has not fetched the feed yet), and a decision to keep the
+            # price must keep that one, not snap back to ours.
+            current = own_offer.price if own_offer is not None else snapshot.current_price
+            decision = self._engine.evaluate(snapshot.config, competitors, current_price=current)
             leader = decision.leader
             names = {offer.merchant_id: offer.merchant_name for offer in offers}
             ranked = sorted({offer.merchant_id: offer for offer in reversed(offers)}.values(),
@@ -534,7 +538,7 @@ class RepricingWorker:
                 "position": decision.expected_position,
             }
 
-            if decision.reason is DecisionReason.PINNED_TO_MIN:
+            if decision.reason in {DecisionReason.MIN_PRICE_SHORT, DecisionReason.PINNED_TO_MIN}:
                 raised.append(
                     Alert(
                         kind=AlertKind.STOP_LOSS,

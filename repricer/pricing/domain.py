@@ -50,13 +50,16 @@ class DecisionReason(StrEnum):
     STRATEGY_TARGET = "strategy_target"
     #: The computed price was above max_price, so it was capped.
     CAPPED_AT_MAX = "capped_at_max"
-    #: «Борьба за 2-20 место»: the strategy's target was below min_price, so the
-    #: price takes the best position in 2..N reachable without breaching it.
-    #: This fallback is automatic for every strategy, not a selectable one.
+    #: «Не хватает мин. цены»: the store to beat sells below min_price, so first
+    #: place is out of reach and the current price is kept.
+    MIN_PRICE_SHORT = "min_price_short"
+    #: Retired: the old fallback took a lower place instead. Kept so that price
+    #: history written before still reads.
     FALLBACK_POSITION = "fallback_position"
-    #: No position in 2..N was reachable either; the price sits at min_price.
+    #: FIXED_PRICE: the base price is below min_price, so min_price is held.
+    #: (Before, also the old fallback dumping to the floor; history keeps those.)
     PINNED_TO_MIN = "pinned_to_min"
-    #: No eligible competitors (none listed, or all ignored): price at max_price.
+    #: No eligible competitors (none listed, or all ignored): current price kept.
     NO_COMPETITORS = "no_competitors"
     #: FIXED_PRICE: the product's base price, whatever competitors are doing.
     FIXED_PRICE = "fixed_price"

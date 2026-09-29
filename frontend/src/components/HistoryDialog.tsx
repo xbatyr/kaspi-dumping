@@ -13,6 +13,7 @@ const REASONS: Record<string, string> = {
   direction_disabled: "изменение в этом направлении выключено",
   strategy_target: "по стратегии",
   capped_at_max: "упёрлись в максимум",
+  min_price_short: "не хватает мин. цены — цена оставлена",
   fallback_position: "боролись за место ниже",
   pinned_to_min: "стоп-лосс: ниже нельзя",
   no_competitors: "конкурентов нет",

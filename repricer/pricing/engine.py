@@ -16,34 +16,32 @@ from repricer.pricing.domain import (
     PricingStrategy,
 )
 
-#: «Борьба за 2-20 место»: the deepest position the fallback will fight for.
-DEFAULT_FALLBACK_MAX_POSITION = 20
-
-
 class PricingEngine:
     """Computes the price for one product in one city from a snapshot of competitor offers.
 
     Stateless and free of I/O, so one instance can be shared across threads and
     Celery workers.
 
-    Evaluation:
+    The rules are AlgaTop's: the price only moves to take or keep first place,
+    and moves no further than that takes. Evaluation:
       1. Drop our own offer (taking our live rating from it), ignored merchants
          and duplicate listings of the same store; rank the rest.
-      2. Keep the XML price when it already ranks first and our offer is visible.
-      3. No competitors left: price at ``max_price``.
+      2. Keep the current price when it already ranks first and our offer is
+         visible (unless raising towards the next store is allowed).
+      3. No competitors left: keep the current price. There is nothing to
+         follow, so there is no reason to jump to ``max_price``.
       4. Apply the selected strategy against the leader (position 1).
-      5. If that lands below ``min_price``, fall back to «Борьба за 2-20 место»:
-         take the best position in 2..N reachable without breaching
-         ``min_price``; if none is reachable, pin to ``min_price``.
-      6. Cap at ``max_price``.
+      5. If that lands below ``min_price``, first place is out of reach («не
+         хватает мин. цены»): keep the current price. Dropping to the floor
+         would cost margin and still not win, and chasing a lower place would
+         swing the price for nothing.
+      6. Cap at ``max_price``; a current price outside the bounds is brought
+         back inside them.
 
     The result is always a whole-tenge price within [min_price, max_price].
+    ``current_price`` should be the price shoppers see on Kaspi now, which is
+    what AlgaTop works from.
     """
-
-    def __init__(self, fallback_max_position: int = DEFAULT_FALLBACK_MAX_POSITION) -> None:
-        if fallback_max_position < 2:
-            raise ValueError(f"fallback_max_position must be >= 2, got {fallback_max_position}")
-        self._fallback_max_position = fallback_max_position
 
     def evaluate(
         self,
@@ -59,6 +57,17 @@ class PricingEngine:
         """
         offers = tuple(offers)
         competitors, own_rating = _rank_competitors(config, offers)
+
+        def hold() -> Decimal:
+            """The current price, kept inside the bounds. A rule priced for the
+            first time starts from the product's own price."""
+            if current_price is not None:
+                price = _whole_tenge(current_price)
+            elif config.base_price is not None:
+                price = _whole_tenge(config.base_price)
+            else:
+                price = config.ceiling_price
+            return min(max(price, config.floor_price), config.ceiling_price)
 
         def decide(
             price: Decimal, reason: DecisionReason, reference: CompetitorOffer | None
@@ -106,25 +115,16 @@ class PricingEngine:
             return decide(current_price, DecisionReason.ALREADY_FIRST, None)
 
         if not competitors:
-            return decide(config.ceiling_price, DecisionReason.NO_COMPETITORS, None)
+            return decide(hold(), DecisionReason.NO_COMPETITORS, None)
 
         target, reference = _strategy_target(config, competitors, own_rating)
+        if target is None:
+            # Fewer stores than the place we aim for: we hold it at any price.
+            return decide(hold(), DecisionReason.STRATEGY_TARGET, None)
         if target >= config.floor_price:
             return decide(target, DecisionReason.STRATEGY_TARGET, reference)
-
-        # The position we aimed at is out of reach: take the best one we can still
-        # afford below it. competitors[0] is position 1.
-        start = (
-            config.target_position or 1
-            if config.strategy is PricingStrategy.TARGET_POSITION
-            else 1
-        )
-        for offer in competitors[start : self._fallback_max_position]:
-            candidate = _price_to_get_ahead(config, offer, own_rating)
-            if candidate >= config.floor_price:
-                return decide(candidate, DecisionReason.FALLBACK_POSITION, offer)
-
-        return decide(config.floor_price, DecisionReason.PINNED_TO_MIN, None)
+        # The store to beat sells below our floor. Stay where we are.
+        return decide(hold(), DecisionReason.MIN_PRICE_SHORT, reference)
 
 
 def _rank_competitors(
@@ -157,8 +157,11 @@ def _rank_key(offer: CompetitorOffer) -> tuple[Decimal, float, str]:
 
 def _strategy_target(
     config: PricingConfig, competitors: tuple[CompetitorOffer, ...], own_rating: float | None
-) -> tuple[Decimal, CompetitorOffer | None]:
-    """The price the strategy aims at, and the competitor it was derived from."""
+) -> tuple[Decimal | None, CompetitorOffer | None]:
+    """The price the strategy aims at, and the competitor it was derived from.
+
+    None when the strategy has no store to price against.
+    """
     leader = competitors[0]
     match config.strategy:
         case PricingStrategy.BEAT_FIRST | PricingStrategy.MATCH_FIRST:
@@ -169,8 +172,8 @@ def _strategy_target(
             index = (config.target_position or 1) - 1
             if index >= len(competitors):
                 # Fewer competitors than the target position: whatever we charge
-                # already lands at or above it, so take the best margin.
-                return config.ceiling_price, None
+                # already lands at or above it.
+                return None, None
             occupant = competitors[index]
             return _price_to_get_ahead(config, occupant, own_rating), occupant
         case PricingStrategy.FIXED_PRICE | PricingStrategy.MANUAL:

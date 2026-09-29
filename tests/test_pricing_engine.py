@@ -173,13 +173,18 @@ def test_duplicate_listings_keep_the_cheapest_offer_per_store() -> None:
     [[], [offer(OWN, 1500)], [offer("sister", 1500)]],
     ids=["empty", "only-own", "only-ignored"],
 )
-def test_no_competitors_prices_at_max(
+def test_no_competitors_keeps_the_current_price(
     strategy: PricingStrategy, offers: list[CompetitorOffer]
 ) -> None:
-    decision = engine.evaluate(config(strategy, ignored=frozenset({"sister"})), offers)
+    # 151982183 alone on its card went 3 490 000 → 4 188 000 when this jumped
+    # to max_price. With nobody to follow, the price stays.
+    decision = engine.evaluate(
+        config(strategy, ignored=frozenset({"sister"})), offers, Decimal(1500)
+    )
 
-    assert decision.new_price == 5000
-    assert decision.reason is DecisionReason.NO_COMPETITORS
+    assert decision.new_price == 1500
+    # Alone on the card we are also first, which keeps the price just the same.
+    assert decision.reason in {DecisionReason.NO_COMPETITORS, DecisionReason.ALREADY_FIRST}
     assert decision.reference_offer is None
     assert decision.leader is None
     assert decision.expected_position == 1
@@ -279,99 +284,80 @@ def test_follow_second_is_capped_at_max() -> None:
     assert decision.reason is DecisionReason.CAPPED_AT_MAX
 
 
-# --- Fallback: «Борьба за 2-20 место» ---------------------------------------
+# --- First place out of reach: «Не хватает мин. цены» ----------------------
+#
+# AlgaTop's rule, and the one merchants expect: when the store to beat sells
+# below our floor, the price stays where it is. The old fallback dumped to the
+# floor or chased a lower place, which moved prices by 10-20% at a time.
 
 
-def test_fallback_undercuts_second_place_when_leader_is_below_min() -> None:
-    offers = [offer("dumper", 800), offer("b", 1500), offer("c", 1700)]
+def test_a_rival_below_the_floor_keeps_our_price() -> None:
+    # 164612291 on 2026-09-29: VeltriX at 580 000, our floor 608 040, ours 675 600.
+    offers = [offer("veltrix", 580_000), offer(OWN, 675_600)]
 
-    decision = engine.evaluate(config(), offers)
+    decision = engine.evaluate(config(min_price=608_040, max_price=810_720), offers, Decimal(675_600))
 
-    assert decision.new_price == 1499
-    assert decision.reason is DecisionReason.FALLBACK_POSITION
-    assert decision.reference_offer == offer("b", 1500)
-    assert decision.leader == offer("dumper", 800)
-    assert decision.expected_position == 2
-
-
-def test_fallback_triggers_when_undercut_lands_just_below_min() -> None:
-    decision = engine.evaluate(config(min_price=1000), [offer("a", 1000), offer("b", 1300)])
-
-    assert decision.new_price == 1299
-    assert decision.reason is DecisionReason.FALLBACK_POSITION
+    assert decision.new_price == 675_600
+    assert decision.reason is DecisionReason.MIN_PRICE_SHORT
+    assert decision.reference_offer == offer("veltrix", 580_000)
+    assert not decision.changed
 
 
-def test_fallback_skips_positions_that_cannot_be_undercut() -> None:
-    offers = [offer("a", 700), offer("b", 900), offer("c", 1000), offer("d", 1400)]
+def test_out_of_reach_never_dumps_to_the_floor_or_chases_a_lower_place() -> None:
+    # 141245039: three stores around 639 600, all under our 687 152 floor.
+    offers = [offer("a", 639_638), offer("b", 639_645), offer("c", 640_005), offer("d", 999_999)]
 
-    decision = engine.evaluate(config(min_price=1000), offers)
+    decision = engine.evaluate(config(min_price=687_152, max_price=1_100_000), offers, Decimal(763_502))
 
-    assert decision.new_price == 1399
-    assert decision.reference_offer == offer("d", 1400)
-    assert decision.expected_position == 4
-
-
-def test_fallback_pins_to_min_when_no_position_is_affordable() -> None:
-    offers = [offer("a", 700), offer("b", 900), offer("c", 1000)]
-
-    decision = engine.evaluate(config(min_price=1000), offers)
-
-    assert decision.new_price == 1000
-    assert decision.reason is DecisionReason.PINNED_TO_MIN
-    assert decision.reference_offer is None
+    assert decision.new_price == 763_502
+    assert decision.reason is DecisionReason.MIN_PRICE_SHORT
 
 
-def test_fallback_does_not_look_past_position_20() -> None:
-    offers = [offer(f"cheap{i:02}", 500 + i) for i in range(20)] + [offer("21st", 3000)]
+def test_out_of_reach_does_not_raise_towards_a_store_further_up() -> None:
+    # 142549924: 876 000 went to 999 998 under the old fallback.
+    offers = [offer("a", 683_999), offer("b", 684_000), offer("h", 999_999)]
 
-    decision = engine.evaluate(config(min_price=1000), offers)
+    decision = engine.evaluate(config(min_price=788_400, max_price=1_051_200), offers, Decimal(876_000))
+
+    assert decision.new_price == 876_000
+
+
+def test_out_of_reach_still_brings_a_price_below_the_floor_up_to_it() -> None:
+    decision = engine.evaluate(config(min_price=1000), [offer("a", 700)], Decimal(900))
 
     assert decision.new_price == 1000
-    assert decision.reason is DecisionReason.PINNED_TO_MIN
+    assert decision.reason is DecisionReason.MIN_PRICE_SHORT
 
 
-def test_fallback_reaches_position_20_exactly() -> None:
-    offers = [offer(f"cheap{i:02}", 500 + i) for i in range(19)] + [offer("20th", 3000)]
+def test_out_of_reach_for_a_rule_never_priced_starts_from_the_own_price() -> None:
+    decision = engine.evaluate(config(min_price=1000, base_price=1800), [offer("a", 700)])
 
-    decision = engine.evaluate(config(min_price=1000), offers)
-
-    assert decision.new_price == 2999
-    assert decision.expected_position == 20
+    assert decision.new_price == 1800
 
 
-def test_fallback_depth_is_configurable() -> None:
-    offers = [offer("a", 500), offer("b", 600), offer("c", 2000)]
+def test_undercut_that_lands_exactly_on_the_floor_is_still_taken() -> None:
+    decision = engine.evaluate(config(min_price=1000), [offer("a", 1001)], Decimal(1500))
 
-    decision = PricingEngine(fallback_max_position=2).evaluate(config(min_price=1000), offers)
+    assert decision.new_price == 1000
+    assert decision.reason is DecisionReason.STRATEGY_TARGET
 
-    assert decision.reason is DecisionReason.PINNED_TO_MIN
+
+def test_follow_second_keeps_the_price_when_the_leader_is_far_below_min() -> None:
+    decision = engine.evaluate(config(FOLLOW), [offer("a", 500), offer("b", 1500)], Decimal(1700))
+
+    assert decision.new_price == 1700
+    assert decision.reason is DecisionReason.MIN_PRICE_SHORT
 
 
-def test_fallback_price_is_capped_at_max() -> None:
+def test_target_position_out_of_reach_keeps_the_price() -> None:
+    offers = [offer("a", 800), offer("b", 900), offer("c", 1000), offer("d", 2500)]
+
     decision = engine.evaluate(
-        config(min_price=1000, max_price=1200), [offer("a", 800), offer("b", 1500)]
+        config(TARGET, min_price=1500, target_position=2), offers, Decimal(2000)
     )
 
-    assert decision.new_price == 1200
-    assert decision.reason is DecisionReason.CAPPED_AT_MAX
-    assert decision.reference_offer == offer("b", 1500)
-
-
-def test_follow_second_uses_fallback_when_leader_is_far_below_min() -> None:
-    decision = engine.evaluate(config(FOLLOW), [offer("a", 500), offer("b", 1500)])
-
-    assert decision.new_price == 1499
-    assert decision.reason is DecisionReason.FALLBACK_POSITION
-
-
-def test_match_first_fallback_matches_a_store_we_outrate() -> None:
-    offers = [offer("dumper", 800), offer("b", 1000, rating=4.0), offer("c", 1500)]
-
-    decision = engine.evaluate(config(MATCH, own_rating=4.8), offers)
-
-    assert decision.new_price == 1000
-    assert decision.reference_offer == offer("b", 1000, rating=4.0)
-    assert decision.expected_position == 2
+    assert decision.new_price == 2000
+    assert decision.reason is DecisionReason.MIN_PRICE_SHORT
 
 
 # --- Rounding and position --------------------------------------------------
@@ -382,7 +368,7 @@ def test_fractional_bounds_are_rounded_inwards() -> None:
 
     assert cfg.floor_price == 1001
     assert cfg.ceiling_price == 2000
-    assert engine.evaluate(cfg, [offer("a", 500)]).new_price == 1001
+    assert engine.evaluate(cfg, [offer("a", 500)], Decimal(900)).new_price == 1001
     assert engine.evaluate(cfg, [offer("a", 9000)]).new_price == 2000
 
 
@@ -395,9 +381,9 @@ def test_undercut_of_fractional_competitor_price_rounds_down() -> None:
 def test_expected_position_puts_better_rated_store_ahead_on_tie() -> None:
     offers = [offer("a", 800), offer("b", 1000, rating=4.9), offer("c", 1000, rating=4.0)]
 
-    decision = engine.evaluate(config(min_price=1000, own_rating=4.5), offers)
+    decision = engine.evaluate(config(min_price=1000, own_rating=4.5), offers, Decimal(1000))
 
-    assert decision.reason is DecisionReason.PINNED_TO_MIN
+    assert decision.reason is DecisionReason.MIN_PRICE_SHORT
     assert decision.expected_position == 3  # behind a (cheaper) and b (better rated)
 
 
@@ -507,11 +493,6 @@ def test_offer_price_from_scraped_float_is_exact() -> None:
     assert scraped.price == Decimal("12990")
 
 
-def test_engine_rejects_fallback_depth_below_two() -> None:
-    with pytest.raises(ValueError):
-        PricingEngine(fallback_max_position=1)
-
-
 # --- Target position --------------------------------------------------------
 
 
@@ -531,34 +512,13 @@ def test_target_position_one_is_beat_first() -> None:
     assert engine.evaluate(config(TARGET, target_position=1), offers).new_price == 1499
 
 
-def test_target_position_deeper_than_the_market_takes_the_best_margin() -> None:
-    decision = engine.evaluate(config(TARGET, target_position=5), [offer("a", 1500)])
+def test_target_position_deeper_than_the_market_keeps_the_price() -> None:
+    decision = engine.evaluate(config(TARGET, target_position=5), [offer("a", 1500)], Decimal(1800))
 
     # Only one competitor, so any price we set already sits at position 2 or better.
-    assert decision.new_price == 5000
+    assert decision.new_price == 1800
     assert decision.reason is DecisionReason.STRATEGY_TARGET
     assert decision.reference_offer is None
-
-
-def test_target_position_falls_back_to_a_place_further_down() -> None:
-    offers = [offer("a", 800), offer("b", 900), offer("c", 1000), offer("d", 2500)]
-
-    decision = engine.evaluate(config(TARGET, min_price=1500, target_position=2), offers)
-
-    # Position 2 would need 899, below min_price, so it takes the next one it can.
-    assert decision.new_price == 2499
-    assert decision.reason is DecisionReason.FALLBACK_POSITION
-    assert decision.reference_offer == offer("d", 2500)
-
-
-def test_target_position_fallback_starts_below_the_target() -> None:
-    offers = [offer("a", 2000), offer("b", 2200), offer("c", 2400)]
-
-    decision = engine.evaluate(config(TARGET, min_price=2300, target_position=2), offers)
-
-    # 2199 is under min_price, so the scan resumes at position 3, not position 2.
-    assert decision.new_price == 2399
-    assert decision.reference_offer == offer("c", 2400)
 
 
 # --- Fixed price and manual -------------------------------------------------

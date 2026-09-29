@@ -87,8 +87,8 @@ def test_price_history_from_decision() -> None:
     decision = PricingEngine().evaluate(
         make_rule(make_product()).to_pricing_config(own_merchant_id=OWN),
         [
-            CompetitorOffer("dumper", Decimal(400000)),
-            CompetitorOffer("b", Decimal(480000)),
+            CompetitorOffer("leader", Decimal(480000)),
+            CompetitorOffer("b", Decimal(490000)),
         ],
         current_price=Decimal(500000),
     )
@@ -97,10 +97,10 @@ def test_price_history_from_decision() -> None:
 
     assert (row.product_id, row.city_id) == (7, ALMATY)
     assert (row.old_price, row.new_price) == (Decimal(500000), Decimal(479999))
-    assert row.reason is DecisionReason.FALLBACK_POSITION
-    assert (row.competitor_top1_merchant_id, row.competitor_top1_price) == ("dumper", Decimal(400000))
-    assert (row.reference_merchant_id, row.reference_price) == ("b", Decimal(480000))
-    assert (row.competitor_count, row.expected_position) == (2, 2)
+    assert row.reason is DecisionReason.STRATEGY_TARGET
+    assert (row.competitor_top1_merchant_id, row.competitor_top1_price) == ("leader", Decimal(480000))
+    assert (row.reference_merchant_id, row.reference_price) == ("leader", Decimal(480000))
+    assert (row.competitor_count, row.expected_position) == (2, 1)
 
 
 # --- PostgreSQL -------------------------------------------------------------
