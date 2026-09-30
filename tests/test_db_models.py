@@ -234,3 +234,47 @@ def test_deleting_product_cascades_to_rules_and_history(session: Session) -> Non
 
     assert session.scalar(select(func.count()).select_from(RepricerRule)) == 0
     assert session.scalar(select(func.count()).select_from(PriceHistory)) == 0
+
+
+def test_latest_changes_takes_the_newest_change_of_each_rule(session: Session) -> None:
+    from repricer.db import latest_changes
+
+    astana = "710000000"
+    product = make_product()
+    make_rule(product)
+    make_rule(product, city_id=astana)
+    other = make_product("SKU-2")
+    make_rule(other)
+    session.add_all([product, other])
+    session.flush()
+    earlier, later = datetime(2026, 9, 1, tzinfo=UTC), datetime(2026, 9, 2, tzinfo=UTC)
+    for product_id, city_id, price, moment in [
+        (product.id, ALMATY, 1000, later),
+        (product.id, ALMATY, 1001, earlier),
+        # Rows written in one transaction share created_at; the later id wins.
+        (product.id, astana, 2000, later),
+        (product.id, astana, 2001, later),
+        # A city that has no rule any more is never asked for.
+        (product.id, "999", 3000, later),
+    ]:
+        session.add(
+            PriceHistory(
+                product_id=product_id,
+                city_id=city_id,
+                new_price=Decimal(price),
+                strategy_used=PricingStrategy.BEAT_FIRST,
+                reason=DecisionReason.STRATEGY_TARGET,
+                expected_position=1,
+                competitor_count=1,
+                created_at=moment,
+            )
+        )
+        session.flush()
+
+    changes = latest_changes(session, [product.id, other.id])
+
+    assert {key: row.new_price for key, row in changes.items()} == {
+        (product.id, ALMATY): Decimal(1000),
+        (product.id, astana): Decimal(2001),
+    }
+    assert latest_changes(session, []) == {}

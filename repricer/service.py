@@ -12,8 +12,9 @@ install until long after it is set up.
 
 from __future__ import annotations
 
-import threading
 import os
+import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -87,7 +88,7 @@ class WorkerService:
         concurrency: int = 4,
         dry_run: bool = False,
         worker_factory: Callable[[RuntimeConfig], RepricingWorker] | None = None,
-        sleep: Callable[[float], bool] | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._session_factory = session_factory
         self._feed_dir = feed_dir
@@ -95,7 +96,7 @@ class WorkerService:
         self._concurrency = concurrency
         self._dry_run = dry_run
         self._worker_factory = worker_factory or self._build_worker
-        self._sleep = sleep
+        self._clock = clock
         self._worker: RepricingWorker | None = None
         self._built_from: tuple[object, ...] | None = None
         self._idle_reason: str | None = None
@@ -155,14 +156,16 @@ class WorkerService:
         stop = stop if stop is not None else threading.Event()
         logger.info("Сервис запущен: настройки читаются из базы, ждём включения в панели")
         while True:
+            started = self._clock()
             wait = IDLE_SECONDS
+            running = False
             config: RuntimeConfig | None = None
             try:
                 # Reading the settings is inside the guard too: a database that is
                 # still starting or blipped must not kill the whole service.
                 config, enabled, strategy_ready = self.read_config()
                 if config and enabled and strategy_ready:
-                    wait = config.interval_seconds
+                    wait, running = config.interval_seconds, True
                 self.run_once()
             except Exception:
                 # A cycle can fail on anything: a database blip, a full disk, a
@@ -174,6 +177,20 @@ class WorkerService:
                         refresh_missing_images(session, limit=10)
                 except Exception:
                     logger.exception("Не удалось обновить изображения товаров")
+            if running:
+                # The interval is from the start of one pass to the start of the
+                # next: scraping hundreds of cards at a safe pace takes minutes,
+                # and waiting the full interval on top of that stretched every
+                # price update by as much.
+                elapsed = self._clock() - started
+                if elapsed >= wait:
+                    logger.warning(
+                        "Проход занял {:.0f} с — дольше интервала {} с; следующий начинается сразу. "
+                        "Ускорить можно прокси или меньшей паузой между запросами",
+                        elapsed,
+                        wait,
+                    )
+                wait = max(0.0, wait - elapsed)
             if stop.wait(wait):
                 logger.info("Остановка по сигналу")
                 return

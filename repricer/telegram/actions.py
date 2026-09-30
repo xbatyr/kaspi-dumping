@@ -1,6 +1,6 @@
 """What the commands actually do to the database.
 
-Kept apart from the aiogram handlers: these are plain functions over a Session,
+Kept apart from the bot's handlers: these are plain functions over a Session,
 so they can be tested without a bot, a token or an event loop.
 """
 

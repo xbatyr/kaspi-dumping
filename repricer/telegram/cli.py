@@ -2,21 +2,25 @@
 
 from __future__ import annotations
 
-import asyncio
+import signal
 import sys
-from typing import Any
+import threading
+from collections.abc import Callable
+from types import FrameType
 
 import typer
 from loguru import logger
-
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
 from repricer.db.settings_store import settings_or_none
 from repricer.telegram.bot import run_bot
 from repricer.telegram.settings import TelegramSettings
 
 app = typer.Typer(add_completion=False, help="Telegram bot for the Kaspi repricer.")
+
+#: How long an update being handled may take to finish on shutdown.
+SHUTDOWN_GRACE_SECONDS = 5.0
 
 
 @app.command()
@@ -53,29 +57,44 @@ def run(
     if not settings.database_url:
         raise typer.BadParameter("нужен адрес базы", param_hint="--database-url")
 
-    asyncio.run(_serve(settings))
+    stop = threading.Event()
+    _install_signal_handlers(stop)
+    # Polling runs in its own thread so a stop signal is acted on at once rather
+    # than after the current long poll: the main thread only waits for the
+    # signal, then gives an update in progress a moment to finish.
+    poller = threading.Thread(target=_serve, args=(settings, stop), name="telegram", daemon=True)
+    poller.start()
+    while poller.is_alive():
+        if stop.wait(1.0):
+            poller.join(SHUTDOWN_GRACE_SECONDS)
+            break
+    logger.info("Бот остановлен")
 
 
-async def _serve(settings: TelegramSettings) -> None:
+def _serve(settings: TelegramSettings, stop: threading.Event) -> None:
     """Run the bot, waiting for a configured token and merchant."""
     session_factory = sessionmaker(create_engine(settings.database_url, pool_pre_ping=True))
     announced = False
-    while True:
-        configured = _from_database(settings, session_factory)
+    while not stop.is_set():
+        try:
+            configured = _from_database(settings, session_factory)
+        except Exception:  # noqa: BLE001 - a database still starting must not end the bot
+            logger.exception("Не удалось прочитать настройки из базы")
+            configured = None
         if configured is None:
             if not announced:
-                logger.info(
-                    "Жду настройки: нужен токен Telegram и ID магазина"
-                )
+                logger.info("Жду настройки: нужен токен Telegram и ID магазина")
                 announced = True
-            await asyncio.sleep(15)
+            stop.wait(15)
             continue
         announced = False
         logger.info("Токен получен, запускаю бота")
-        await run_bot(configured)
+        run_bot(configured, stop, session_factory=session_factory)
 
 
-def _from_database(settings: TelegramSettings, session_factory: Any) -> TelegramSettings | None:
+def _from_database(
+    settings: TelegramSettings, session_factory: Callable[[], Session]
+) -> TelegramSettings | None:
     """Settings with the fixed token and owner chats, or None while empty."""
     with session_factory() as session:
         shop = settings_or_none(session)
@@ -92,6 +111,15 @@ def _from_database(settings: TelegramSettings, session_factory: Any) -> Telegram
             "company": (shop.company if shop else "") or settings.company,
         }
     )
+
+
+def _install_signal_handlers(stop: threading.Event) -> None:
+    def handle(signum: int, _frame: FrameType | None) -> None:
+        logger.info("{} получен, останавливаю бота", signal.Signals(signum).name)
+        stop.set()
+
+    for received in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(received, handle)
 
 
 if __name__ == "__main__":

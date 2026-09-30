@@ -1,10 +1,9 @@
-import asyncio
+import threading
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
 import pytest
-from aiogram.types import CallbackQuery, Message
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -18,10 +17,11 @@ from repricer.telegram.actions import (
     render_offers,
     resume_all,
 )
+from repricer.telegram.api import TelegramError, Update
 from repricer.telegram.auth import OwnerOnly
 from repricer.telegram.alerts import BroadcastTelegramSink
 from repricer.telegram.subscriptions import subscribe, subscriber_chat_ids, unsubscribe
-from repricer.telegram.bot import min_price_keyboard, seconds_until
+from repricer.telegram.bot import RepricerBot, min_price_keyboard, seconds_until
 from repricer.telegram.reports import (
     daily_summary,
     render_status,
@@ -264,10 +264,10 @@ def test_another_merchants_rule_cannot_be_touched(session: Session) -> None:
 def test_the_keyboard_encodes_the_rule_and_the_step() -> None:
     keyboard = min_price_keyboard(17)
 
-    data = [button.callback_data for row in keyboard.inline_keyboard for button in row]
+    data = [button["callback_data"] for row in keyboard["inline_keyboard"] for button in row]
     assert data == ["min:17:-5", "min:17:-1", "min:17:1", "min:17:5"]
     # Telegram rejects callback data over 64 bytes.
-    assert all(len(item or "") <= 64 for item in data)
+    assert all(len(item.encode()) <= 64 for item in data)
 
 
 # --- /status and the daily summary -------------------------------------------
@@ -354,72 +354,41 @@ def test_a_quiet_day_is_explained(session: Session) -> None:
 # --- Access control -----------------------------------------------------------
 
 
-def fake_message(chat_id: int, text: str = "/status") -> Message:
-    return Message.model_validate(
-        {
-            "message_id": 1,
-            "date": datetime.now(UTC),
-            "chat": {"id": chat_id, "type": "private"},
-            "text": text,
-        }
-    )
+def fake_message(chat_id: int, text: str = "/status") -> Update:
+    return Update(chat_id=chat_id, text=text)
 
 
-def fake_callback(chat_id: int) -> CallbackQuery:
-    return CallbackQuery.model_validate(
-        {
-            "id": "1",
-            "from": {"id": chat_id, "is_bot": False, "first_name": "Кто-то"},
-            "chat_instance": "1",
-            "data": "stop:yes",
-            "message": {
-                "message_id": 1,
-                "date": datetime.now(UTC),
-                "chat": {"id": chat_id, "type": "private"},
-            },
-        }
-    )
-
-
-async def handler(_event: Any, _data: dict[str, Any]) -> str:
-    return "handled"
+def fake_callback(chat_id: int, data: str = "stop:yes") -> Update:
+    return Update(chat_id=chat_id, callback_id="1", callback_data=data, message_id=5)
 
 
 def test_the_owner_gets_through() -> None:
-    guard = OwnerOnly(frozenset({42}))
-    result = asyncio.run(guard(handler, fake_message(42), {}))
-
-    assert result == "handled"
+    assert OwnerOnly(frozenset({42})).allows(fake_message(42))
 
 
 def test_a_stranger_is_ignored_without_a_reply(warnings_logged: list[str]) -> None:
-    guard = OwnerOnly(frozenset({42}))
-    result = asyncio.run(guard(handler, fake_message(777), {}))
-
-    assert result is None
+    assert not OwnerOnly(frozenset({42})).allows(fake_message(777))
     assert any("777" in message for message in warnings_logged)
 
 
 def test_button_presses_are_checked_too() -> None:
     guard = OwnerOnly(frozenset({42}))
 
-    assert asyncio.run(guard(handler, fake_callback(777), {})) is None
-    assert asyncio.run(guard(handler, fake_callback(42), {})) == "handled"
+    assert not guard.allows(fake_callback(777))
+    assert guard.allows(fake_callback(42))
 
 
 def test_an_empty_allowlist_locks_everyone_out(warnings_logged: list[str]) -> None:
-    guard = OwnerOnly(frozenset())
-
-    assert asyncio.run(guard(handler, fake_message(42), {})) is None
+    assert not OwnerOnly(frozenset()).allows(fake_message(42))
     assert any("ALLOWED_TELEGRAM_CHAT_IDS is empty" in message for message in warnings_logged)
 
 
 def test_anyone_can_subscribe_but_not_control_the_bot() -> None:
     guard = OwnerOnly(frozenset({42}))
 
-    assert asyncio.run(guard(handler, fake_message(777, "/start"), {})) == "handled"
-    assert asyncio.run(guard(handler, fake_message(777, "/unsubscribe"), {})) == "handled"
-    assert asyncio.run(guard(handler, fake_message(777, "/stop_all"), {})) is None
+    assert guard.allows(fake_message(777, "/start"))
+    assert guard.allows(fake_message(777, "/unsubscribe@shop_bot"))
+    assert not guard.allows(fake_message(777, "/stop_all"))
 
 
 def test_subscriptions_are_persistent_and_scoped_to_merchant(session: Session) -> None:
@@ -503,3 +472,196 @@ def test_blank_values_in_env_mean_unset() -> None:
     assert settings.merchant_rating is None
     assert settings.alert_chat_id is None
     assert settings.target_chat_id == 42
+
+
+# --- The bot against a fake Telegram ------------------------------------------
+
+
+class FakeTelegram:
+    """Records what the bot sends and serves scripted getUpdates batches."""
+
+    def __init__(self, batches: list[list[dict[str, Any]] | Exception] | None = None) -> None:
+        self.sent: list[tuple[int, str, Any]] = []
+        self.edited: list[tuple[int, int, str]] = []
+        self.answered: list[tuple[str, str | None]] = []
+        self.offsets: list[int] = []
+        self.stop = threading.Event()
+        self.fail_next_send = False
+        self._batches = list(batches or [])
+
+    def get_updates(self, offset: int, *, wait: int) -> list[dict[str, Any]]:
+        self.offsets.append(offset)
+        if len(self._batches) <= 1:
+            self.stop.set()  # the last batch: the loop ends after it
+        if not self._batches:
+            return []
+        batch = self._batches.pop(0)
+        if isinstance(batch, Exception):
+            raise batch
+        return batch
+
+    def send_message(self, chat_id: int, text: str, *, reply_markup: Any = None) -> None:
+        if self.fail_next_send:
+            self.fail_next_send = False
+            raise TelegramError("sendMessage: Bad Request")
+        self.sent.append((chat_id, text, reply_markup))
+
+    def edit_message_text(self, chat_id: int, message_id: int, text: str) -> None:
+        self.edited.append((chat_id, message_id, text))
+
+    def answer_callback(self, callback_id: str, text: str | None = None) -> None:
+        self.answered.append((callback_id, text))
+
+
+class FakeKaspi:
+    def __init__(self, offers: list[Offer] | Exception) -> None:
+        self._offers = offers
+        self.closed = False
+
+    def get_product_offers(self, _product_id: str, _city_id: str) -> list[Offer]:
+        if isinstance(self._offers, Exception):
+            raise self._offers
+        return self._offers
+
+    def close(self) -> None:
+        self.closed = True
+
+
+OWNER = 42
+
+
+@pytest.fixture
+def session_factory(session: Session) -> Any:
+    connection = session.connection()
+
+    def factory() -> Session:
+        return Session(bind=connection, join_transaction_mode="create_savepoint")
+
+    return factory
+
+
+def build_bot(session_factory: Any, api: FakeTelegram, kaspi: FakeKaspi | None = None) -> RepricerBot:
+    from repricer.uploader import MerchantIdentity
+
+    return RepricerBot(
+        api,
+        session_factory=session_factory,
+        client_factory=lambda: kaspi or FakeKaspi([]),  # type: ignore[arg-type,return-value]
+        merchant=MerchantIdentity(MERCHANT, "Ромашка"),
+        allowed_chat_ids=frozenset({OWNER}),
+        summary_chat_id=OWNER,
+    )
+
+
+def message_update(update_id: int, chat_id: int, text: str) -> dict[str, Any]:
+    return {"update_id": update_id, "message": {"message_id": 1, "chat": {"id": chat_id}, "text": text}}
+
+
+def test_updates_are_read_from_plain_json() -> None:
+    command = Update.parse(message_update(1, 42, "  /sku@shop_bot   IPH 13 "))
+    press = Update.parse({"update_id": 2, "callback_query": {
+        "id": "77", "data": "stop:no", "message": {"message_id": 9, "chat": {"id": 42}},
+    }})
+
+    assert command is not None and command.command == ("/sku", "IPH 13")
+    assert press == Update(chat_id=42, callback_id="77", callback_data="stop:no", message_id=9)
+    assert Update(chat_id=42, text="привет").command == ("", "")
+    assert Update.parse({"update_id": 3, "edited_message": {}}) is None
+
+
+def test_a_stranger_can_subscribe_and_nothing_more(session: Session, session_factory: Any) -> None:
+    api = FakeTelegram()
+    bot = build_bot(session_factory, api)
+
+    bot.handle(fake_message(777, "/start"))
+    bot.handle(fake_message(777, "/stop_all"))
+    bot.handle(fake_callback(777, "stop:yes"))
+
+    assert [chat for chat, _text, _markup in api.sent] == [777]
+    assert subscriber_chat_ids(session, MERCHANT) == [777]
+    assert api.answered == []
+
+
+def test_stop_all_asks_first_and_then_pauses_everything(session: Session, session_factory: Any) -> None:
+    make_product(session)
+    api = FakeTelegram()
+    bot = build_bot(session_factory, api)
+
+    bot.handle(fake_message(OWNER, "/stop_all"))
+    bot.handle(fake_callback(OWNER, "stop:yes"))
+
+    buttons = [button["callback_data"] for row in api.sent[0][2]["inline_keyboard"] for button in row]
+    assert buttons == ["stop:yes", "stop:no"]
+    assert api.answered == [("1", "Готово")]
+    assert api.edited[0][:2] == (OWNER, 5) and "<b>1</b>" in api.edited[0][2]
+    session.expire_all()
+    assert session.scalars(select(RepricerRule)).one().is_active is False
+
+
+def test_sku_shows_the_competition_with_floor_buttons(session: Session, session_factory: Any) -> None:
+    product = make_product(session)
+    api = FakeTelegram()
+    kaspi = FakeKaspi([offer("rival", 369000), offer(MERCHANT, 370112)])
+    bot = build_bot(session_factory, api, kaspi)
+
+    bot.handle(fake_message(OWNER, f"/sku {product.sku}"))
+
+    _chat, text, markup = api.sent[0]
+    assert "369 000" in text and "👉" in text
+    assert markup == min_price_keyboard(product.rules[0].id)
+    assert kaspi.closed
+
+
+def test_sku_escapes_what_was_typed_and_reports_kaspi_trouble(
+    session: Session, session_factory: Any
+) -> None:
+    from repricer.scraper import KaspiTransportError
+
+    product = make_product(session)
+    api = FakeTelegram()
+    bot = build_bot(session_factory, api, FakeKaspi(KaspiTransportError("timeout <proxy>")))
+
+    bot.handle(fake_message(OWNER, "/sku <b>"))
+    bot.handle(fake_message(OWNER, f"/sku {product.sku}"))
+
+    assert api.sent[0][1] == "Товар <code>&lt;b&gt;</code> не найден."
+    assert api.sent[1][1] == "Не удалось получить цены с Kaspi: timeout &lt;proxy&gt;"
+
+
+def test_floor_buttons_move_the_floor_and_ignore_garbage(session: Session, session_factory: Any) -> None:
+    product = make_product(session, min_price=300000)
+    rule_id = product.rules[0].id
+    api = FakeTelegram()
+    bot = build_bot(session_factory, api)
+
+    bot.handle(fake_callback(OWNER, f"min:{rule_id}:5"))
+    bot.handle(fake_callback(OWNER, "min:x:y"))
+    bot.handle(fake_callback(OWNER, "min:999999:5"))
+
+    assert api.answered == [("1", "Готово"), ("1", None), ("1", "Правило не найдено")]
+    assert "315 000" in api.sent[0][1] and api.sent[0][2] == min_price_keyboard(rule_id)
+    session.expire_all()
+    assert session.get(RepricerRule, rule_id).min_price == Decimal(315000)  # type: ignore[union-attr]
+
+
+def test_polling_survives_a_failing_update_and_confirms_every_one(session_factory: Any) -> None:
+    api = FakeTelegram([
+        [message_update(10, OWNER, "/help"), message_update(11, OWNER, "/help"), {"update_id": 12}],
+        TelegramError("getUpdates: Bad Gateway"),
+    ])
+    api.fail_next_send = True
+    bot = build_bot(session_factory, api)
+
+    bot.poll_forever(api.stop)
+
+    # The first reply failed; the second update was still handled.
+    assert len(api.sent) == 1 and "/status" in api.sent[0][1]
+    assert api.offsets == [0, 13]
+
+
+def test_the_daily_summary_goes_to_the_owner(session_factory: Any) -> None:
+    api = FakeTelegram()
+
+    build_bot(session_factory, api).send_daily_summary()
+
+    assert api.sent[0][0] == OWNER and "Сводка за день" in api.sent[0][1]
