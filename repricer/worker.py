@@ -90,6 +90,10 @@ class RuleSnapshot:
     last_position: int | None = None
     #: The shop's «Не демпинговать под межгород».
     ignore_intercity: bool = False
+    #: The feed price was set by hand (e.g. «Поднять до максимальных») after the
+    #: bot's last change, so it, not the older price Kaspi still shows, is the
+    #: price to work from until Kaspi fetches the feed.
+    price_set_by_hand: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -337,6 +341,7 @@ class RepricingWorker:
                     exc,
                 )
                 continue
+            change = changes.get((rule.product_id, rule.city_id))
             snapshots.append(
                 RuleSnapshot(
                     rule_id=rule.id,
@@ -345,12 +350,15 @@ class RepricingWorker:
                     city_id=rule.city_id,
                     current_price=rule.current_price,
                     config=config,
-                    last_position=(
-                        change.expected_position
-                        if (change := changes.get((rule.product_id, rule.city_id)))
-                        else None
-                    ),
+                    last_position=change.expected_position if change else None,
                     ignore_intercity=bool(shop and shop.ignore_intercity_rivals),
+                    # The bot writes history with every price it sets, so a feed
+                    # price that differs from its last one came from elsewhere.
+                    price_set_by_hand=(
+                        change is not None
+                        and rule.current_price is not None
+                        and rule.current_price != change.new_price
+                    ),
                 )
             )
         return snapshots
@@ -406,8 +414,14 @@ class RepricingWorker:
             # Work from the price shoppers see, as AlgaTop does. The price in our
             # own feed can be stale (another tool or the cabinet changed it, or
             # Kaspi has not fetched the feed yet), and a decision to keep the
-            # price must keep that one, not snap back to ours.
-            current = own_offer.price if own_offer is not None else snapshot.current_price
+            # price must keep that one, not snap back to ours. A price the owner
+            # set by hand is the exception: Kaspi shows the old one for up to an
+            # hour, and keeping that would quietly undo the owner's change.
+            current = (
+                own_offer.price
+                if own_offer is not None and not snapshot.price_set_by_hand
+                else snapshot.current_price
+            )
             decision = self._engine.evaluate(snapshot.config, competitors, current_price=current)
             leader = decision.leader
             names = {offer.merchant_id: offer.merchant_name for offer in offers}

@@ -282,6 +282,42 @@ def test_prices_from_what_kaspi_shows_and_then_holds_still(
     assert len(sink.messages) == 1
 
 
+@pytest.mark.parametrize(
+    ("rivals", "expected"),
+    [
+        # The competition left: the raised price is what the owner wanted.
+        ([], 500000),
+        # A rival is still there: the bot lowers from the raised price, not
+        # from the old one Kaspi still shows.
+        ([competitor("rival", 450000)], 449999),
+    ],
+)
+def test_a_price_raised_by_hand_is_not_undone_before_kaspi_fetches_it(
+    session: Session, build_worker: Any, rivals: list[Offer], expected: int
+) -> None:
+    from repricer.api.routes.tools import _raise_to_max
+
+    product = make_product(session, "IPH", IPHONE, cities={ALMATY: 370000})
+    ours = competitor(MERCHANT.merchant_id, 370000)
+    worker, _, _ = build_worker(
+        FakeKaspiClient({(IPHONE, ALMATY): [ours, competitor("rival", 362001)]})
+    )
+    with worker:
+        worker.run_once()  # the bot's own change: 362 000
+    session.expire_all()
+    assert product.rules[0].current_price == Decimal(362000)
+
+    # «Поднять до максимальных», while Kaspi still shows the old 370 000.
+    _raise_to_max(product)
+    session.flush()
+    worker, _, _ = build_worker(FakeKaspiClient({(IPHONE, ALMATY): [ours, *rivals]}))
+    with worker:
+        worker.run_once()
+
+    session.expire_all()
+    assert product.rules[0].current_price == Decimal(expected)
+
+
 @pytest.mark.parametrize(("ignore", "expected"), [(False, 369999), (True, 380000)])
 def test_intercity_rivals_can_be_left_out_of_the_competition(
     session: Session, build_worker: Any, ignore: bool, expected: int

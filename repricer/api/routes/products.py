@@ -7,6 +7,7 @@ whole price list at once.
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Annotated
 
 from fastapi import APIRouter, Body, HTTPException, Query, status
@@ -295,10 +296,18 @@ def import_algatop(
     switched_on: list[str] = []
     for row in rows:
         product = known.get(row.sku)
+        if product is None and (only_store is None or not row.kaspi_product_id):
+            not_found.append(row.sku)
+            continue
+        # Checked before anything is written: a refused row must not still
+        # change the status, cost or price of the product, or create it.
+        try:
+            limits = _algatop_limits(product, row)
+        except ValueError as exc:
+            errors.append(ImportError(sku=row.sku, reason=f"строка {row.line}: {exc}"))
+            continue
         if product is None:
-            if only_store is None or not row.kaspi_product_id:
-                not_found.append(row.sku)
-                continue
+            assert only_store is not None
             product = Product(merchant_id=merchant.merchant_id, sku=row.sku,
                               kaspi_product_id=row.kaspi_product_id, title=row.title or row.sku)
             product.availabilities.append(ProductAvailability(store_id=only_store))
@@ -306,11 +315,7 @@ def import_algatop(
             known[row.sku] = product
             created.add(row.sku)
         was_active = product.is_active if row.sku not in created else None
-        try:
-            change = _apply_algatop_row(product, row, shop)
-        except ValueError as exc:
-            errors.append(ImportError(sku=row.sku, reason=f"строка {row.line}: {exc}"))
-            continue
+        change = _apply_algatop_row(product, row, shop, limits)
         touched.add(row.sku)
         if was_active is True and not product.is_active and row.sku not in switched_off:
             switched_off.append(row.sku)
@@ -352,7 +357,28 @@ def import_algatop(
     )
 
 
-def _apply_algatop_row(product: Product, row: AlgaTopRow, shop: ShopSettings) -> AlgaTopChangeOut:
+def _algatop_limits(product: Product | None, row: AlgaTopRow) -> tuple[Decimal, Decimal]:
+    """The row's min and max price; a side AlgaTop left empty keeps the rule's.
+
+    Raises ValueError when the two cross.
+    """
+    rule = _rule_for_city(product, row.city_id)
+    minimum = row.min_price or (rule.min_price if rule else row.price)
+    maximum = row.max_price or (rule.max_price if rule else row.price)
+    if minimum > maximum:
+        raise ValueError(f"мин. цена {minimum} выше макс. {maximum}")
+    return minimum, maximum
+
+
+def _rule_for_city(product: Product | None, city_id: str) -> RepricerRule | None:
+    if product is None:
+        return None
+    return next((rule for rule in product.rules if rule.city_id == city_id), None)
+
+
+def _apply_algatop_row(
+    product: Product, row: AlgaTopRow, shop: ShopSettings, limits: tuple[Decimal, Decimal]
+) -> AlgaTopChangeOut:
     if row.kaspi_product_id:
         product.kaspi_product_id = row.kaspi_product_id
     if row.title and not product.title:
@@ -378,12 +404,9 @@ def _apply_algatop_row(product: Product, row: AlgaTopRow, shop: ShopSettings) ->
         if row.preorder_days is not None:
             store.preorder_days = row.preorder_days or None
 
-    rule = next((item for item in product.rules if item.city_id == row.city_id), None)
+    rule = _rule_for_city(product, row.city_id)
     before = (rule.current_price, rule.min_price, rule.max_price) if rule else (None, None, None)
-    minimum = row.min_price or (rule.min_price if rule else row.price)
-    maximum = row.max_price or (rule.max_price if rule else row.price)
-    if minimum > maximum:
-        raise ValueError(f"мин. цена {minimum} выше макс. {maximum}")
+    minimum, maximum = limits
     if rule is None:
         shared = shop.global_strategy if row.city_id in shop.global_city_ids else None
         rule = RepricerRule(
@@ -396,10 +419,18 @@ def _apply_algatop_row(product: Product, row: AlgaTopRow, shop: ShopSettings) ->
         )
         product.rules.append(rule)
     rule.set_limits_in_tenge(min_price=minimum, max_price=maximum)
+    # A limit AlgaTop gives is that figure in tenge, even when it matches the
+    # one a percentage produced: kept as a percentage, it would be recalculated
+    # from AlgaTop's (usually lower) price below and the floor would drop.
+    if row.min_price is not None:
+        rule.min_percent = None
+    if row.max_price is not None:
+        rule.max_percent = None
     if row.step is not None:
         rule.step = row.step
     rule.current_price = row.price
-    # Other cities set as a percentage follow the new own price.
+    # Limits AlgaTop left empty and other cities set as a percentage follow the
+    # new own price.
     product.refresh_percent_limits()
     return AlgaTopChangeOut(
         sku=product.sku,
@@ -408,9 +439,9 @@ def _apply_algatop_row(product: Product, row: AlgaTopRow, shop: ShopSettings) ->
         price_before=before[0],
         price_after=row.price,
         min_before=before[1],
-        min_after=minimum,
+        min_after=rule.min_price,
         max_before=before[2],
-        max_after=maximum,
+        max_after=rule.max_price,
     )
 
 

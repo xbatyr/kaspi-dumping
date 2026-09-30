@@ -293,8 +293,8 @@ def collect_feed_offers(
                 for city_id, price in city_prices.items()
             }
         base_price = own_price or max(city_prices.values())
-        offers.append(
-            FeedOffer(
+        try:
+            feed_offer = FeedOffer(
                 sku=item.sku,
                 model=item.model,
                 brand=item.brand,
@@ -302,7 +302,12 @@ def collect_feed_offers(
                 price=base_price if include_base_price else None,
                 city_prices=city_prices,
             )
-        )
+        except ValueError as exc:
+            # One price Kaspi cannot take (tiyn, zero) must not stop the whole
+            # shop's feed, any more than a missing pickup point does.
+            excluded.append(ExcludedOffer(item.sku, str(exc)))
+            continue
+        offers.append(feed_offer)
     for offer in excluded:
         logger.warning(
             "merchant={}: offer {} left out of the feed: {}", merchant_id, offer.sku, offer.reason
