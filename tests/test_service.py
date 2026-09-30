@@ -223,17 +223,31 @@ def test_the_rating_reaches_the_engine(
 # --- The loop -----------------------------------------------------------------
 
 
-def test_the_loop_sleeps_for_the_configured_interval(
-    session: Session, session_factory: Any, tmp_path: Path
+class _Clock:
+    """Moves on by ``step`` seconds every time it is read."""
+
+    def __init__(self, step: float) -> None:
+        self._now = 0.0
+        self._step = step
+
+    def __call__(self) -> float:
+        self._now += self._step
+        return self._now
+
+
+@pytest.mark.parametrize(("pass_takes", "expected_wait"), [(0, 600), (200, 400), (900, 0)])
+def test_the_interval_runs_from_the_start_of_one_pass_to_the_next(
+    session: Session, session_factory: Any, tmp_path: Path, pass_takes: float, expected_wait: float
 ) -> None:
     configure(session, interval_seconds=600)
     service, _, _ = service_with_fake(session_factory, tmp_path)
+    service._clock = _Clock(pass_takes)
     waits: list[float] = []
-    stop = _StopAfter(waits, times=1)
 
-    service.run_forever(stop)  # type: ignore[arg-type]
+    service.run_forever(_StopAfter(waits, times=1))  # type: ignore[arg-type]
 
-    assert waits == [600]
+    # A pass that outlasts the interval is followed by the next one at once.
+    assert waits == [expected_wait]
 
 
 def test_an_idle_loop_checks_back_sooner(

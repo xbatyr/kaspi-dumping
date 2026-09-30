@@ -1,29 +1,24 @@
-"""The aiogram side: handlers, keyboards, polling.
+"""The Telegram side: commands, buttons, long polling.
 
 Deliberately thin. Every handler parses the update, calls a function from
 ``actions`` or ``reports`` and sends what comes back, so the logic can be tested
-without Telegram.
-
-The database and the scraper are synchronous, so their calls go through
-``asyncio.to_thread`` and never block the event loop.
+without Telegram. Synchronous like the database and the scraper: one owner
+sends a few commands a day, and a thread per update would buy nothing.
 """
 
 from __future__ import annotations
 
-import asyncio
+import threading
 from collections.abc import Callable
-from contextlib import suppress
 from datetime import datetime, timedelta
+from html import escape
+from typing import Any, Protocol
 
-from aiogram import Bot, Dispatcher, F, Router
-from aiogram.client.default import DefaultBotProperties
-from aiogram.enums import ParseMode
-from aiogram.filters import Command, CommandObject, CommandStart
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from loguru import logger
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
+from repricer.cities import DEFAULT_CITY_ID
 from repricer.scraper import KaspiClient, KaspiError, RateLimiter
 from repricer.telegram.actions import (
     MIN_PRICE_STEPS,
@@ -34,8 +29,8 @@ from repricer.telegram.actions import (
     render_offers,
     resume_all,
 )
+from repricer.telegram.api import TelegramApi, TelegramError, Update
 from repricer.telegram.auth import OwnerOnly
-from repricer.cities import DEFAULT_CITY_ID
 from repricer.telegram.reports import (
     daily_summary,
     render_status,
@@ -46,8 +41,6 @@ from repricer.telegram.settings import TelegramSettings
 from repricer.telegram.subscriptions import subscribe, unsubscribe
 from repricer.uploader import KASPI_TIMEZONE, MerchantIdentity
 
-router = Router(name="repricer")
-
 HELP = (
     "🤖 <b>Kaspi Repricer</b>\n\n"
     "/status — что сейчас с ценами и позициями\n"
@@ -56,188 +49,257 @@ HELP = (
     "/stop_all — поставить на паузу все правила\n"
     "/resume_all — снять с паузы"
 )
+#: How long one getUpdates call waits for something to happen.
+POLL_SECONDS = 20
+#: Longest pause between retries while Telegram cannot be reached.
+MAX_BACKOFF_SECONDS = 60.0
+
+Keyboard = dict[str, list[list[dict[str, str]]]]
 
 
-@router.message(CommandStart())
-async def start(
-    message: Message, session_factory: Callable[[], Session], merchant: MerchantIdentity
-) -> None:
-    def save() -> None:
-        with session_factory() as session:
-            subscribe(session, merchant.merchant_id, message.chat.id)
+class BotApi(Protocol):
+    """What the bot needs from Telegram; TelegramApi, or a fake in tests."""
 
-    await asyncio.to_thread(save)
-    await message.answer("Вы подписаны на изменения цен. Отключить уведомления: /unsubscribe")
+    def get_updates(self, offset: int, *, wait: int) -> list[dict[str, Any]]: ...
 
+    def send_message(
+        self, chat_id: int, text: str, *, reply_markup: Keyboard | None = None
+    ) -> None: ...
 
-@router.message(Command("unsubscribe"))
-async def stop_subscription(
-    message: Message, session_factory: Callable[[], Session], merchant: MerchantIdentity
-) -> None:
-    def remove() -> None:
-        with session_factory() as session:
-            unsubscribe(session, merchant.merchant_id, message.chat.id)
+    def edit_message_text(self, chat_id: int, message_id: int, text: str) -> None: ...
 
-    await asyncio.to_thread(remove)
-    await message.answer("Уведомления о ценах отключены. Вернуться: /start")
+    def answer_callback(self, callback_id: str, text: str | None = None) -> None: ...
 
 
-@router.message(Command("help"))
-async def help_command(message: Message) -> None:
-    await message.answer(HELP)
-
-
-@router.message(Command("status"))
-async def status(message: Message, session_factory: Callable[[], Session], merchant: MerchantIdentity) -> None:
-    def query() -> str:
-        with session_factory() as session:
-            return render_status(status_report(session, merchant.merchant_id))
-
-    await message.answer(await asyncio.to_thread(query))
-
-
-@router.message(Command("summary"))
-async def summary(message: Message, session_factory: Callable[[], Session], merchant: MerchantIdentity) -> None:
-    def query() -> str:
-        with session_factory() as session:
-            return render_summary(
-                daily_summary(session, merchant.merchant_id, since=start_of_today())
-            )
-
-    await message.answer(await asyncio.to_thread(query))
-
-
-@router.message(Command("stop_all"))
-async def stop_all(message: Message) -> None:
-    # Pausing the whole store is one tap away from a fat finger, so it asks first.
-    await message.answer(
-        "⛔️ Поставить на паузу <b>все</b> правила репрайсера?",
-        reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(text="Да, стоп", callback_data="stop:yes"),
-                    InlineKeyboardButton(text="Отмена", callback_data="stop:no"),
-                ]
-            ]
-        ),
-    )
-
-
-@router.callback_query(F.data == "stop:no")
-async def stop_cancelled(callback: CallbackQuery) -> None:
-    await callback.answer("Отменено")
-    if isinstance(callback.message, Message):
-        await callback.message.edit_text("Отменено, ничего не изменилось.")
-
-
-@router.callback_query(F.data == "stop:yes")
-async def stop_confirmed(
-    callback: CallbackQuery, session_factory: Callable[[], Session], merchant: MerchantIdentity
-) -> None:
-    def run() -> int:
-        with session_factory() as session:
-            return pause_all(session, merchant.merchant_id)
-
-    paused = await asyncio.to_thread(run)
-    await callback.answer("Готово")
-    if isinstance(callback.message, Message):
-        await callback.message.edit_text(
-            f"⛔️ Репрайсер остановлен: правил на паузе — <b>{paused}</b>.\n"
-            "Вернуть в работу: /resume_all"
-        )
-
-
-@router.message(Command("resume_all"))
-async def resume(message: Message, session_factory: Callable[[], Session], merchant: MerchantIdentity) -> None:
-    def run() -> int:
-        with session_factory() as session:
-            return resume_all(session, merchant.merchant_id)
-
-    resumed = await asyncio.to_thread(run)
-    await message.answer(f"▶️ Снято с паузы правил: <b>{resumed}</b>.")
-
-
-@router.message(Command("sku"))
-async def sku(
-    message: Message,
-    command: CommandObject,
-    session_factory: Callable[[], Session],
-    merchant: MerchantIdentity,
-    client_factory: Callable[[], KaspiClient],
-) -> None:
-    needle = (command.args or "").strip()
-    if not needle:
-        await message.answer("Укажите SKU или ID карточки: <code>/sku IPH13-128</code>")
-        return
-
-    def load() -> tuple[str, str, str, list[int]] | None:
-        with session_factory() as session:
-            product = find_product(session, merchant.merchant_id, needle)
-            if product is None:
-                return None
-            rules = sorted(product.rules, key=lambda rule: rule.city_id)
-            city_id = rules[0].city_id if rules else DEFAULT_CITY_ID
-            return product.sku, product.kaspi_product_id, city_id, [rule.id for rule in rules]
-
-    found = await asyncio.to_thread(load)
-    if found is None:
-        await message.answer(f"Товар <code>{needle}</code> не найден.")
-        return
-    _sku, kaspi_product_id, city_id, rule_ids = found
-
-    try:
-        client = client_factory()
-        offers = await asyncio.to_thread(client.get_product_offers, kaspi_product_id, city_id)
-    except (KaspiError, ValueError) as exc:
-        await message.answer(f"Не удалось получить цены с Kaspi: {exc}")
-        return
-
-    def render() -> str:
-        with session_factory() as session:
-            product = find_product(session, merchant.merchant_id, needle)
-            if product is None:
-                return "Товар исчез из базы, пока мы ходили в Kaspi."
-            rule = next((item for item in product.rules if item.city_id == city_id), None)
-            return render_offers(
-                product, rule, offers, merchant.merchant_id, city_id=city_id
-            )
-
-    await message.answer(
-        await asyncio.to_thread(render),
-        reply_markup=min_price_keyboard(rule_ids[0]) if rule_ids else None,
-    )
-
-
-@router.callback_query(F.data.startswith("min:"))
-async def change_min_price(
-    callback: CallbackQuery, session_factory: Callable[[], Session], merchant: MerchantIdentity
-) -> None:
-    _, raw_rule_id, raw_percent = (callback.data or "").split(":")
-
-    def run() -> str | None:
-        with session_factory() as session:
-            change = adjust_min_price(
-                session, merchant.merchant_id, int(raw_rule_id), int(raw_percent)
-            )
-            return render_min_price_change(change) if change else None
-
-    answer = await asyncio.to_thread(run)
-    await callback.answer("Готово" if answer else "Правило не найдено")
-    if answer and isinstance(callback.message, Message):
-        await callback.message.answer(answer, reply_markup=min_price_keyboard(int(raw_rule_id)))
-
-
-def min_price_keyboard(rule_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
+def min_price_keyboard(rule_id: int) -> Keyboard:
+    return {
+        "inline_keyboard": [
             [
-                InlineKeyboardButton(
-                    text=f"мин {percent:+d}%", callback_data=f"min:{rule_id}:{percent}"
-                )
+                {"text": f"мин {percent:+d}%", "callback_data": f"min:{rule_id}:{percent}"}
                 for percent in MIN_PRICE_STEPS
             ]
         ]
-    )
+    }
+
+
+STOP_KEYBOARD: Keyboard = {
+    "inline_keyboard": [
+        [
+            {"text": "Да, стоп", "callback_data": "stop:yes"},
+            {"text": "Отмена", "callback_data": "stop:no"},
+        ]
+    ]
+}
+
+
+class RepricerBot:
+    """Turns updates into actions and replies."""
+
+    def __init__(
+        self,
+        api: BotApi,
+        *,
+        session_factory: Callable[[], Session],
+        client_factory: Callable[[], KaspiClient],
+        merchant: MerchantIdentity,
+        allowed_chat_ids: frozenset[int],
+        summary_chat_id: int | None = None,
+        summary_at: str = "20:00",
+    ) -> None:
+        self._api = api
+        self._session_factory = session_factory
+        self._client_factory = client_factory
+        self._merchant = merchant
+        self._guard = OwnerOnly(allowed_chat_ids)
+        self._summary_chat_id = summary_chat_id
+        self._summary_at = summary_at
+        self._commands: dict[str, Callable[[int, str], None]] = {
+            "/start": self._start,
+            "/unsubscribe": self._unsubscribe,
+            "/help": self._help,
+            "/status": self._status,
+            "/summary": self._summary,
+            "/stop_all": self._stop_all,
+            "/resume_all": self._resume_all,
+            "/sku": self._sku,
+        }
+
+    # --- Updates --------------------------------------------------------------
+
+    def handle(self, update: Update) -> None:
+        if update.chat_id is None or not self._guard.allows(update):
+            return
+        if update.callback_id is not None:
+            self._button(update, update.chat_id)
+            return
+        command, args = update.command
+        handler = self._commands.get(command)
+        if handler is not None:
+            handler(update.chat_id, args)
+
+    def poll_forever(self, stop: threading.Event) -> None:
+        """Long-poll Telegram until ``stop`` is set, sending the daily summary on time."""
+        if self._summary_chat_id is None:
+            logger.warning("No chat to send the daily summary to; it is not sent")
+        next_summary = _next_occurrence(self._summary_at)
+        offset = 0
+        backoff = 1.0
+        while not stop.is_set():
+            try:
+                updates = self._api.get_updates(offset, wait=POLL_SECONDS)
+            except TelegramError as exc:
+                logger.warning("Telegram unreachable ({}); retrying in {:.0f}s", exc, backoff)
+                if stop.wait(backoff):
+                    return
+                backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
+                continue
+            backoff = 1.0
+            for raw in updates:
+                update_id = raw.get("update_id")
+                if isinstance(update_id, int):
+                    # Confirmed with the next call, so a failing update is not
+                    # retried forever.
+                    offset = max(offset, update_id + 1)
+                update = Update.parse(raw)
+                if update is None:
+                    continue
+                try:
+                    self.handle(update)
+                except Exception:  # noqa: BLE001 - one bad update must not stop the bot
+                    logger.exception("Telegram update {} failed", update_id)
+            if datetime.now(KASPI_TIMEZONE) >= next_summary:
+                self.send_daily_summary()
+                next_summary = _next_occurrence(self._summary_at)
+
+    def send_daily_summary(self) -> None:
+        if self._summary_chat_id is None:
+            return
+        try:
+            with self._session_factory() as session:
+                text = render_summary(
+                    daily_summary(session, self._merchant.merchant_id, since=start_of_today())
+                )
+            self._api.send_message(self._summary_chat_id, text)
+        except Exception:  # noqa: BLE001 - a missed summary must not kill the bot
+            logger.exception("Could not send the daily summary")
+
+    # --- Commands -------------------------------------------------------------
+
+    def _start(self, chat_id: int, _args: str) -> None:
+        with self._session_factory() as session:
+            subscribe(session, self._merchant.merchant_id, chat_id)
+        self._api.send_message(chat_id, "Вы подписаны на изменения цен. Отключить уведомления: /unsubscribe")
+
+    def _unsubscribe(self, chat_id: int, _args: str) -> None:
+        with self._session_factory() as session:
+            unsubscribe(session, self._merchant.merchant_id, chat_id)
+        self._api.send_message(chat_id, "Уведомления о ценах отключены. Вернуться: /start")
+
+    def _help(self, chat_id: int, _args: str) -> None:
+        self._api.send_message(chat_id, HELP)
+
+    def _status(self, chat_id: int, _args: str) -> None:
+        with self._session_factory() as session:
+            text = render_status(status_report(session, self._merchant.merchant_id))
+        self._api.send_message(chat_id, text)
+
+    def _summary(self, chat_id: int, _args: str) -> None:
+        with self._session_factory() as session:
+            text = render_summary(
+                daily_summary(session, self._merchant.merchant_id, since=start_of_today())
+            )
+        self._api.send_message(chat_id, text)
+
+    def _stop_all(self, chat_id: int, _args: str) -> None:
+        # Pausing the whole store is one tap away from a fat finger, so it asks first.
+        self._api.send_message(
+            chat_id, "⛔️ Поставить на паузу <b>все</b> правила репрайсера?", reply_markup=STOP_KEYBOARD
+        )
+
+    def _resume_all(self, chat_id: int, _args: str) -> None:
+        with self._session_factory() as session:
+            resumed = resume_all(session, self._merchant.merchant_id)
+        self._api.send_message(chat_id, f"▶️ Снято с паузы правил: <b>{resumed}</b>.")
+
+    def _sku(self, chat_id: int, needle: str) -> None:
+        if not needle:
+            self._api.send_message(chat_id, "Укажите SKU или ID карточки: <code>/sku IPH13-128</code>")
+            return
+        with self._session_factory() as session:
+            product = find_product(session, self._merchant.merchant_id, needle)
+            if product is None:
+                self._api.send_message(chat_id, f"Товар <code>{escape(needle)}</code> не найден.")
+                return
+            rules = sorted(product.rules, key=lambda rule: rule.city_id)
+            city_id = rules[0].city_id if rules else DEFAULT_CITY_ID
+            kaspi_product_id, rule_ids = product.kaspi_product_id, [rule.id for rule in rules]
+
+        # Outside the session: a slow Kaspi must not hold a database connection.
+        try:
+            client = self._client_factory()
+            try:
+                offers = client.get_product_offers(kaspi_product_id, city_id)
+            finally:
+                client.close()
+        except (KaspiError, ValueError) as exc:
+            self._api.send_message(chat_id, f"Не удалось получить цены с Kaspi: {escape(str(exc))}")
+            return
+
+        with self._session_factory() as session:
+            product = find_product(session, self._merchant.merchant_id, needle)
+            if product is None:
+                text = "Товар исчез из базы, пока мы ходили в Kaspi."
+            else:
+                rule = next((item for item in product.rules if item.city_id == city_id), None)
+                text = render_offers(
+                    product, rule, offers, self._merchant.merchant_id, city_id=city_id
+                )
+        self._api.send_message(
+            chat_id, text, reply_markup=min_price_keyboard(rule_ids[0]) if rule_ids else None
+        )
+
+    # --- Buttons --------------------------------------------------------------
+
+    def _button(self, update: Update, chat_id: int) -> None:
+        assert update.callback_id is not None
+        data = update.callback_data
+        if data == "stop:no":
+            self._api.answer_callback(update.callback_id, "Отменено")
+            self._replace(update, chat_id, "Отменено, ничего не изменилось.")
+        elif data == "stop:yes":
+            with self._session_factory() as session:
+                paused = pause_all(session, self._merchant.merchant_id)
+            self._api.answer_callback(update.callback_id, "Готово")
+            self._replace(
+                update,
+                chat_id,
+                f"⛔️ Репрайсер остановлен: правил на паузе — <b>{paused}</b>.\n"
+                "Вернуть в работу: /resume_all",
+            )
+        elif data.startswith("min:"):
+            self._change_min_price(update, chat_id)
+        else:
+            # Stops the spinner on a button this version no longer knows.
+            self._api.answer_callback(update.callback_id)
+
+    def _change_min_price(self, update: Update, chat_id: int) -> None:
+        assert update.callback_id is not None
+        try:
+            _, raw_rule_id, raw_percent = update.callback_data.split(":")
+            rule_id, percent = int(raw_rule_id), int(raw_percent)
+        except ValueError:
+            self._api.answer_callback(update.callback_id)
+            return
+        with self._session_factory() as session:
+            change = adjust_min_price(session, self._merchant.merchant_id, rule_id, percent)
+            answer = render_min_price_change(change) if change else None
+        self._api.answer_callback(update.callback_id, "Готово" if answer else "Правило не найдено")
+        if answer:
+            self._api.send_message(chat_id, answer, reply_markup=min_price_keyboard(rule_id))
+
+    def _replace(self, update: Update, chat_id: int, text: str) -> None:
+        if update.message_id is not None:
+            self._api.edit_message_text(chat_id, update.message_id, text)
 
 
 def start_of_today() -> datetime:
@@ -245,87 +307,48 @@ def start_of_today() -> datetime:
     return now.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
-def build_dispatcher(
-    settings: TelegramSettings,
-    *,
-    session_factory: Callable[[], Session],
-    client_factory: Callable[[], KaspiClient],
-) -> Dispatcher:
-    """Wires the handlers, the allowlist and the shared objects they need."""
-    dispatcher = Dispatcher()
-    dispatcher.include_router(router)
-    guard = OwnerOnly(settings.allowed_chat_ids)
-    dispatcher.message.middleware(guard)
-    dispatcher.callback_query.middleware(guard)
-    dispatcher.workflow_data.update(
-        session_factory=session_factory,
-        client_factory=client_factory,
-        merchant=settings.merchant,
-    )
-    return dispatcher
-
-
-async def daily_summary_loop(
-    bot: Bot,
-    settings: TelegramSettings,
-    session_factory: Callable[[], Session],
-) -> None:
-    """Sends the summary once a day at the configured local time."""
-    chat_id = settings.target_chat_id
-    if chat_id is None:
-        logger.warning("No chat to send the daily summary to; the loop is idle")
-        return
-    while True:
-        await asyncio.sleep(seconds_until(settings.summary_at))
-
-        def query() -> str:
-            with session_factory() as session:
-                return render_summary(
-                    daily_summary(session, settings.merchant.merchant_id, since=start_of_today())
-                )
-
-        try:
-            await bot.send_message(chat_id, await asyncio.to_thread(query))
-        except Exception:  # noqa: BLE001 - a missed summary must not kill the bot
-            logger.exception("Could not send the daily summary")
-
-
 def seconds_until(clock_time: str) -> float:
     """Seconds from now until the next HH:MM in Kazakhstan time."""
+    return (_next_occurrence(clock_time) - datetime.now(KASPI_TIMEZONE)).total_seconds()
+
+
+def _next_occurrence(clock_time: str) -> datetime:
     hour, _, minute = clock_time.partition(":")
     now = datetime.now(KASPI_TIMEZONE)
     target = now.replace(hour=int(hour), minute=int(minute or 0), second=0, microsecond=0)
     if target <= now:
         target += timedelta(days=1)
-    return (target - now).total_seconds()
+    return target
 
 
-async def run_bot(settings: TelegramSettings) -> None:
+def run_bot(
+    settings: TelegramSettings,
+    stop: threading.Event,
+    *,
+    session_factory: Callable[[], Session] | None = None,
+) -> None:
+    """Poll Telegram for this shop until ``stop`` is set."""
     if not settings.bot_token:
         raise ValueError("TELEGRAM_BOT_TOKEN is not set")
-    engine = create_engine(settings.database_url, pool_pre_ping=True)
-    session_factory = sessionmaker(engine)
+    if session_factory is None:
+        session_factory = sessionmaker(create_engine(settings.database_url, pool_pre_ping=True))
     limiter = RateLimiter(1.0)
-
-    bot = Bot(
-        token=settings.bot_token,
-        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
-    )
-    dispatcher = build_dispatcher(
-        settings,
+    api = TelegramApi(settings.bot_token)
+    bot = RepricerBot(
+        api,
         session_factory=session_factory,
         client_factory=lambda: KaspiClient(rate_limiter=limiter),
+        merchant=settings.merchant,
+        allowed_chat_ids=settings.allowed_chat_ids,
+        summary_chat_id=settings.target_chat_id,
+        summary_at=settings.summary_at,
     )
-    summary_task = asyncio.create_task(daily_summary_loop(bot, settings, session_factory))
     logger.info(
         "Bot started for merchant {}, {} chat(s) allowed",
         settings.merchant.merchant_id,
         len(settings.allowed_chat_ids),
     )
     try:
-        await dispatcher.start_polling(bot)
+        bot.poll_forever(stop)
     finally:
-        summary_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await summary_task
-        await bot.session.close()
+        api.close()

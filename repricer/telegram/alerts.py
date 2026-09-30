@@ -11,8 +11,8 @@ Both conditions persist for as long as the competitor keeps its price, so they
 are reported on the *transition* into the condition, not on every cycle. Without
 that, a single dumper would send an alert every few minutes all night.
 
-The sink is a plain synchronous HTTP call to the Bot API: the worker is
-synchronous and has no event loop to hand to aiogram.
+The sink is a plain synchronous HTTP call to the Bot API, like everything the
+bot sends: the worker is synchronous too.
 """
 
 from __future__ import annotations

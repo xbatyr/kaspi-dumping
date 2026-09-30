@@ -453,6 +453,9 @@ class PriceHistory(Base):
     __tablename__ = "price_history"
     __table_args__ = (
         Index("ix_price_history_product_city_created", "product_id", "city_id", "created_at"),
+        # "Changes today" in the status screen and the daily summary: without it
+        # each count read the whole history.
+        Index("ix_price_history_created_at", "created_at"),
         CheckConstraint("new_price > 0", name="new_price_positive"),
     )
 
