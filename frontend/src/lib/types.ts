@@ -296,6 +296,7 @@ export interface Status {
   feed_ready: boolean;
   worker_enabled: boolean;
   global_strategy_configured: boolean;
+  test_mode: boolean;
 }
 
 export interface HistoryEntry {
@@ -337,6 +338,8 @@ export interface Settings {
   home_city_id: string;
   compete_home_city_only: boolean;
   ignore_intercity_rivals: boolean;
+  test_mode: boolean;
+  raise_cooldown_minutes: number;
 }
 
 export interface SettingsDraft {
@@ -354,6 +357,8 @@ export interface SettingsDraft {
   home_city_id: string;
   compete_home_city_only: boolean;
   ignore_intercity_rivals: boolean;
+  test_mode: boolean;
+  raise_cooldown_minutes: number;
 }
 
 export interface KaspiCard {

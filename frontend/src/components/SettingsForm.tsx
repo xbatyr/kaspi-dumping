@@ -27,11 +27,18 @@ export function SettingsForm({ settings }: { settings: Settings }) {
   const [homeCity, setHomeCity] = useState(settings.home_city_id);
   const [homeCityOnly, setHomeCityOnly] = useState(settings.compete_home_city_only);
   const [ignoreIntercity, setIgnoreIntercity] = useState(settings.ignore_intercity_rivals);
+  const [testMode, setTestMode] = useState(settings.test_mode);
+  const [raiseCooldown, setRaiseCooldown] = useState(String(settings.raise_cooldown_minutes / 60));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
 
   async function save() {
+    const cooldownHours = Number(raiseCooldown.replace(",", ".") || "0");
+    if (!Number.isFinite(cooldownHours) || cooldownHours < 0 || cooldownHours > 168) {
+      setError("Задержка повышения — от 0 до 168 часов");
+      return;
+    }
     setSaving(true);
     setError(null);
     setSaved(false);
@@ -57,6 +64,8 @@ export function SettingsForm({ settings }: { settings: Settings }) {
         home_city_id: homeCity,
         compete_home_city_only: homeCityOnly,
         ignore_intercity_rivals: ignoreIntercity,
+        test_mode: testMode,
+        raise_cooldown_minutes: Math.round(cooldownHours * 60),
       });
       setSaved(true);
       router.refresh();
@@ -114,6 +123,21 @@ export function SettingsForm({ settings }: { settings: Settings }) {
             </span>
           </span>
         </label>
+        <label className="flex cursor-pointer items-center gap-3 rounded-lg border border-slate-200 p-3">
+          <input
+            type="checkbox"
+            checked={testMode}
+            onChange={(event) => setTestMode(event.target.checked)}
+            className="size-4 cursor-pointer accent-slate-900"
+          />
+          <span>
+            <span className="block text-sm font-medium text-slate-900">Тестовый режим</span>
+            <span className="block text-xs text-slate-500">
+              Бот считает цены как обычно, но не меняет их, а присылает в Telegram «Хочу поменять»
+              с причиной. Удобно, чтобы проверить стратегию до запуска.
+            </span>
+          </span>
+        </label>
         <div className="grid gap-3 sm:grid-cols-2">
           <Field
             label="Пауза между циклами, сек"
@@ -159,10 +183,18 @@ export function SettingsForm({ settings }: { settings: Settings }) {
             </span>
             <span className="block text-xs text-slate-500">
               Если у вас доставка по городу, а конкурент везёт из другого города (несколько дней),
-              бот не снижает цену под него и сравнивает вас только с местными продавцами.
+              бот не снижает цену под него и сравнивает вас только с местными продавцами. Kaspi
+              сам помечает такие предложения как «Доставка межгород».
             </span>
           </span>
         </label>
+        <Field
+          label="Повышать цену не раньше чем через, ч"
+          value={raiseCooldown}
+          onChange={setRaiseCooldown}
+          placeholder="2"
+          hint="Сколько цена должна простоять без изменений, прежде чем бот её поднимет. Снижение не ждёт: иначе уйдёт первое место. 0 — без задержки."
+        />
         <label className="block">
           <span className="mb-1 block text-xs font-medium text-slate-600">Свой город</span>
           <select

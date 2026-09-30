@@ -170,6 +170,7 @@ class ShopSettings(TimestampMixin, Base):
             "commission_percent BETWEEN 0 AND 100", name="commission_percent_in_range"
         ),
         CheckConstraint("delivery_cost >= 0", name="delivery_cost_not_negative"),
+        CheckConstraint("raise_cooldown_minutes >= 0", name="raise_cooldown_not_negative"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=False, default=1)
@@ -212,10 +213,16 @@ class ShopSettings(TimestampMixin, Base):
     #: alone, and the feed sells every other city at the product's own price, so
     #: a price cut at home never spreads to cities the shop hardly ships to.
     compete_home_city_only: Mapped[bool] = mapped_column(server_default=false())
-    #: «Не демпинговать под межгород»: when our own delivery is local, stores
-    #: shipping from another city are left out of the competition, so the bot
-    #: does not cut the price under a rival who is days slower.
-    ignore_intercity_rivals: Mapped[bool] = mapped_column(server_default=false())
+    #: «Не демпинговать под межгород»: unless we ship from another city
+    #: ourselves, stores that do are left out of the competition, so the bot
+    #: never cuts the price under a rival who is days slower. On by default.
+    ignore_intercity_rivals: Mapped[bool] = mapped_column(server_default=true())
+    #: «Тестовый режим»: the bot works out every price and says in Telegram what
+    #: it would change, but no price, history row or feed is written.
+    test_mode: Mapped[bool] = mapped_column(server_default=false())
+    #: A price goes up only once it has stood this long since its last change,
+    #: so a cut is not undone on the next pass. Cuts are never delayed.
+    raise_cooldown_minutes: Mapped[int] = mapped_column(server_default=text("120"))
     # Defaults of the margin calculator. A product may override the last two.
     #: Retail tax on turnover; 3% in Kazakhstan.
     tax_percent: Mapped[Decimal] = mapped_column(server_default=text("3"))
@@ -240,7 +247,9 @@ class ShopSettings(TimestampMixin, Base):
         kwargs.setdefault("global_city_ids", [])
         kwargs.setdefault("home_city_id", DEFAULT_CITY_ID)
         kwargs.setdefault("compete_home_city_only", False)
-        kwargs.setdefault("ignore_intercity_rivals", False)
+        kwargs.setdefault("ignore_intercity_rivals", True)
+        kwargs.setdefault("test_mode", False)
+        kwargs.setdefault("raise_cooldown_minutes", 120)
         kwargs.setdefault("tax_percent", DEFAULT_TAX_PERCENT)
         kwargs.setdefault("commission_percent", Decimal(0))
         kwargs.setdefault("delivery_cost", Decimal(0))

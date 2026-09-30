@@ -31,13 +31,14 @@ from collections import defaultdict
 from collections.abc import Callable, Iterable, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from repricer.db.models import Product, RepricerRule
+from repricer.db.models import Product, RepricerRule, ShopSettings
 from repricer.db.queries import latest_changes
 from repricer.db.settings_store import settings_or_none
 from repricer.pricing import (
@@ -106,6 +107,8 @@ class TaskOutcome:
     unreachable: bool = False
     #: Shop name of the cheapest competitor, for alerts; the engine only keeps IDs.
     leader_name: str | None = None
+    #: Shop name of the store the price was set against, for notifications.
+    reference_name: str | None = None
     market_snapshot: dict[str, str | int | None] | None = None
 
 
@@ -118,6 +121,8 @@ class CycleReport:
     unreachable: int = 0
     feed_url: str | None = None
     dry_run: bool = False
+    #: «Тестовый режим»: changes were announced, not made.
+    test_mode: bool = False
     duration: float = 0.0
 
 
@@ -157,6 +162,8 @@ class RepricingWorker:
         self._local = threading.local()
         self._clients: list[KaspiClient] = []
         self._clients_lock = threading.Lock()
+        #: Test mode: the change last announced per rule, so it is told once.
+        self._announced: dict[int, tuple[Decimal | None, Decimal]] = {}
 
     def __enter__(self) -> RepricingWorker:
         return self
@@ -179,7 +186,7 @@ class RepricingWorker:
         started = time.monotonic()
         merchant_id = self._settings.merchant.merchant_id
         with self._session_factory() as session:
-            snapshots = self._load_rules(session)
+            snapshots, test_mode = self._load_rules(session)
         if not snapshots:
             logger.info("merchant={}: no enabled rules, nothing to do", merchant_id)
             return CycleReport(dry_run=self._settings.dry_run, duration=time.monotonic() - started)
@@ -191,7 +198,7 @@ class RepricingWorker:
             len(snapshots),
             len(by_city),
             ", ".join(f"{city}: {len(rules)}" for city, rules in sorted(by_city.items())),
-            " [dry run]" if self._settings.dry_run else "",
+            " [dry run]" if self._settings.dry_run else " [тестовый режим]" if test_mode else "",
         )
 
         outcomes = self._price_all(by_city)
@@ -212,6 +219,11 @@ class RepricingWorker:
                 changed,
                 len(decided),
             )
+        elif test_mode:
+            # The market is still recorded, so the catalogue shows where each
+            # product stands; prices, history and the feed stay as they are.
+            self._write_market(decided)
+            changed = self._announce_intended_changes(decided)
         elif decided:
             feed_url, applied_ids = self._write(decided)
             changed = len(applied_ids)
@@ -226,6 +238,7 @@ class RepricingWorker:
             unreachable=unreachable,
             feed_url=feed_url,
             dry_run=self._settings.dry_run,
+            test_mode=test_mode and not self._settings.dry_run,
             duration=time.monotonic() - started,
         )
         logger.info(
@@ -265,9 +278,13 @@ class RepricingWorker:
 
     # --- Steps ----------------------------------------------------------------
 
-    def _load_rules(self, session: Session) -> list[RuleSnapshot]:
-        shop = settings_or_none(session)
-        shared = shop if shop is not None and shop.global_strategy is not None else None
+    def _load_rules(self, session: Session) -> tuple[list[RuleSnapshot], bool]:
+        """The rules to price this cycle, and whether the shop is in test mode."""
+        # Without a saved row the defaults apply, the same ones a new row gets.
+        shop = settings_or_none(session) or ShopSettings()
+        shared = shop if shop.global_strategy is not None else None
+        cooldown = timedelta(minutes=shop.raise_cooldown_minutes)
+        now = datetime.now(UTC)
         statement = (
             select(RepricerRule, Product)
             .join(Product, RepricerRule.product_id == Product.id)
@@ -284,7 +301,7 @@ class RepricingWorker:
         changes = latest_changes(session, [product.id for _rule, product in rows])
 
         snapshots: list[RuleSnapshot] = []
-        home_city = shop.competing_city_id if shop is not None else None
+        home_city = shop.competing_city_id
         if home_city is not None and rows and not any(rule.city_id == home_city for rule, _ in rows):
             # Otherwise the bot would look busy and quietly price nothing.
             logger.warning(
@@ -307,6 +324,7 @@ class RepricingWorker:
             }:
                 logger.warning("sku={} city={}: link a Kaspi card before automatic repricing", product.sku, rule.city_id)
                 continue
+            change = changes.get((rule.product_id, rule.city_id))
             try:
                 if shared is not None:
                     assert shared.global_strategy is not None
@@ -327,10 +345,16 @@ class RepricingWorker:
                         own_rating=self._settings.own_rating,
                         base_price=product.base_price,
                     )
+                # A price goes up only once it has stood for the cooldown since
+                # its last change, so a cut is not taken back on the next pass.
+                # Cuts are never held back: that would lose first place.
+                may_raise = product.auto_increase and not (
+                    change is not None and now - change.created_at < cooldown
+                )
                 config = replace(config,
                     auto_decrease=product.auto_decrease,
-                    auto_increase=product.auto_increase,
-                    raise_when_first=product.auto_increase)
+                    auto_increase=may_raise,
+                    raise_when_first=may_raise)
             except ValueError as exc:
                 # A rule the API could not have saved, or one whose product lost
                 # its base price. Skipping it beats failing the whole cycle.
@@ -341,7 +365,6 @@ class RepricingWorker:
                     exc,
                 )
                 continue
-            change = changes.get((rule.product_id, rule.city_id))
             snapshots.append(
                 RuleSnapshot(
                     rule_id=rule.id,
@@ -351,7 +374,7 @@ class RepricingWorker:
                     current_price=rule.current_price,
                     config=config,
                     last_position=change.expected_position if change else None,
-                    ignore_intercity=bool(shop and shop.ignore_intercity_rivals),
+                    ignore_intercity=shop.ignore_intercity_rivals,
                     # The bot writes history with every price it sets, so a feed
                     # price that differs from its last one came from elsewhere.
                     price_set_by_hand=(
@@ -361,7 +384,7 @@ class RepricingWorker:
                     ),
                 )
             )
-        return snapshots
+        return snapshots, shop.test_mode
 
     def _price_all(self, by_city: dict[str, list[RuleSnapshot]]) -> list[TaskOutcome]:
         futures: dict[Future[TaskOutcome], RuleSnapshot] = {}
@@ -404,9 +427,10 @@ class RepricingWorker:
                     snapshot.city_id,
                 )
             rivals = offers
-            if snapshot.ignore_intercity and own_offer is not None and own_offer.intercity is False:
-                # We deliver in the buyer's city; a store shipping from another
-                # city is days slower, so the price is not cut under it.
+            if snapshot.ignore_intercity and (own_offer is None or own_offer.intercity is not True):
+                # Unless we ship from another city ourselves, a store that does
+                # is days slower: the price is never cut under it, and where it
+                # is the only one cheaper, we count as first.
                 rivals = [offer for offer in offers if offer.intercity is not True]
             competitors = [
                 CompetitorOffer(offer.merchant_id, offer.price, offer.rating) for offer in rivals
@@ -429,10 +453,14 @@ class RepricingWorker:
                             key=lambda offer: (offer.price, -(offer.rating or 0)))
             own_index = next((index for index, offer in enumerate(ranked)
                               if offer.merchant_id == own_merchant_id), None)
+            reference = decision.reference_offer
             return TaskOutcome(
                 snapshot,
                 decision=decision,
                 leader_name=names.get(leader.merchant_id) if leader else None,
+                reference_name=(
+                    names.get(reference.merchant_id) or reference.merchant_id if reference else None
+                ),
                 market_snapshot={
                     "position": own_index + 1 if own_index is not None else None,
                     "offer_count": len(ranked),
@@ -487,15 +515,63 @@ class RepricingWorker:
             return result.feed_url, applied_ids
 
     def _notify_price_changes(self, outcomes: Sequence[TaskOutcome], applied_ids: set[int]) -> None:
-        if self._price_updates is None or not applied_ids:
+        self._broadcast(
+            "💰 <b>Цены в прайсе обновлены</b>\n",
+            [
+                _change_line(outcome, outcome.snapshot.current_price)
+                for outcome in outcomes
+                if outcome.snapshot.rule_id in applied_ids and outcome.decision is not None
+            ],
+        )
+
+    def _write_market(self, decided: Sequence[TaskOutcome]) -> None:
+        """What Kaspi shows and when it was checked; never a price."""
+        snapshots = {outcome.snapshot.rule_id: outcome.market_snapshot for outcome in decided}
+        with self._session_factory() as session:
+            evaluated_at = datetime.now(UTC)
+            for rule in session.scalars(select(RepricerRule).where(RepricerRule.id.in_(snapshots))):
+                rule.market_snapshot = snapshots.get(rule.id)
+                rule.last_evaluated_at = evaluated_at
+            session.commit()
+
+    def _announce_intended_changes(self, decided: Sequence[TaskOutcome]) -> int:
+        """«Хочу поменять»: the changes test mode holds back, each told once.
+
+        The same change would come up every cycle for as long as the market
+        stands still, so it is announced when it first appears or when it
+        differs from the last one announced for that rule.
+        """
+        wanted: list[TaskOutcome] = []
+        fresh: list[TaskOutcome] = []
+        for outcome in decided:
+            decision, rule_id = outcome.decision, outcome.snapshot.rule_id
+            if decision is None or not decision.changed:
+                self._announced.pop(rule_id, None)
+                continue
+            wanted.append(outcome)
+            key = (decision.previous_price, decision.new_price)
+            if self._announced.get(rule_id) != key:
+                self._announced[rule_id] = key
+                fresh.append(outcome)
+        self._broadcast(
+            "🧪 <b>Тестовый режим. Хочу поменять:</b>\n"
+            "<i>Цены не меняются, пока режим включён в настройках.</i>\n",
+            [
+                _change_line(outcome, outcome.decision.previous_price)
+                for outcome in fresh
+                if outcome.decision is not None
+            ],
+        )
+        return len(wanted)
+
+    def _broadcast(self, header: str, lines: Sequence[str]) -> None:
+        """Send lines under one header, split to stay under Telegram's limit."""
+        if not lines:
             return
-        lines = [
-            f"<b>{escape(outcome.snapshot.sku)}</b> · {escape(city_name(outcome.snapshot.city_id))}: "
-            f"{tenge(outcome.snapshot.current_price)} → {tenge(outcome.decision.new_price)}"
-            for outcome in outcomes
-            if outcome.snapshot.rule_id in applied_ids and outcome.decision is not None
-        ]
-        header = "💰 <b>Цены в прайсе обновлены</b>\n"
+        if self._price_updates is None:
+            for line in lines:
+                logger.info("{} {}", header.strip(), line)
+            return
         chunk = header
         for line in lines:
             if len(chunk) + len(line) + 1 > 3500:
@@ -616,6 +692,47 @@ class RepricingWorker:
             with self._clients_lock:
                 self._clients.append(client)
         return client
+
+
+def _change_line(outcome: TaskOutcome, before: Decimal | None) -> str:
+    """One price change for Telegram, with the reason it was made."""
+    decision = outcome.decision
+    assert decision is not None
+    line = (
+        f"<b>{escape(outcome.snapshot.sku)}</b> · {escape(city_name(outcome.snapshot.city_id))}: "
+        f"{tenge(before)} → {tenge(decision.new_price)}"
+    )
+    why = _why(outcome)
+    return f"{line}\n    <i>{escape(why)}</i>" if why else line
+
+
+def _why(outcome: TaskOutcome) -> str | None:
+    """Why the engine chose this price, in the owner's words."""
+    decision = outcome.decision
+    assert decision is not None
+    reference = decision.reference_offer
+    who = f"{outcome.reference_name} ({tenge(reference.price)})" if reference else None
+    match decision.reason:
+        case DecisionReason.STRATEGY_TARGET:
+            return f"на шаг дешевле: {who}" if who else None
+        case DecisionReason.MIN_PRICE_SHORT:
+            if decision.previous_price is not None and decision.new_price > decision.previous_price:
+                return f"первое место ниже минимума, поднимаю под следующего: {who}"
+            return "первое место ниже минимальной цены — цена сохранена"
+        case DecisionReason.NO_COMPETITORS:
+            return "конкурентов нет — максимальная цена"
+        case DecisionReason.CAPPED_AT_MAX:
+            return "упёрлись в максимальную цену"
+        case DecisionReason.ALREADY_FIRST:
+            return "уже на первом месте — цена как на Kaspi"
+        case DecisionReason.DIRECTION_DISABLED:
+            return "автоснижение или автоповышение выключено — цена как на Kaspi"
+        case DecisionReason.PINNED_TO_MIN:
+            return "минимальная цена"
+        case DecisionReason.FIXED_PRICE:
+            return "фиксированная цена"
+        case _:
+            return None
 
 
 def _money(amount: Decimal | None) -> str:

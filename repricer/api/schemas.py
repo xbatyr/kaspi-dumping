@@ -736,6 +736,8 @@ class SettingsOut(BaseModel):
     home_city_id: str
     compete_home_city_only: bool
     ignore_intercity_rivals: bool
+    test_mode: bool
+    raise_cooldown_minutes: int
 
 
 class SettingsIn(BaseModel):
@@ -761,7 +763,11 @@ class SettingsIn(BaseModel):
     #: Reprice the home city only; other cities sell at the product's own price.
     compete_home_city_only: bool = False
     #: Do not undercut stores that ship from another city when ours is local.
-    ignore_intercity_rivals: bool = False
+    ignore_intercity_rivals: bool = True
+    #: Work every price out and tell Telegram, but change nothing.
+    test_mode: bool = False
+    #: Raise a price only once it has stood this long since its last change.
+    raise_cooldown_minutes: int = Field(default=120, ge=0, le=7 * 24 * 60)
 
     @model_validator(mode="after")
     def tidy(self) -> Self:
@@ -793,6 +799,8 @@ class StatusOut(BaseModel):
     feed_ready: bool
     worker_enabled: bool
     global_strategy_configured: bool
+    #: Prices are worked out and announced, never written.
+    test_mode: bool = False
 
 
 class ProductCardOut(BaseModel):

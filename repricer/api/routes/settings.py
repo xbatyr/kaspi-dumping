@@ -43,12 +43,15 @@ def update_settings(payload: SettingsIn, session: SessionDep) -> SettingsOut:
     settings.home_city_id = payload.home_city_id
     settings.compete_home_city_only = payload.compete_home_city_only
     settings.ignore_intercity_rivals = payload.ignore_intercity_rivals
+    settings.test_mode = payload.test_mode
+    settings.raise_cooldown_minutes = payload.raise_cooldown_minutes
     session.commit()
     session.refresh(settings)
     logger.info(
-        "Settings saved: merchant={} worker_enabled={} proxies={}",
+        "Settings saved: merchant={} worker_enabled={} test_mode={} proxies={}",
         settings.merchant_id or "—",
         settings.worker_enabled,
+        settings.test_mode,
         [mask_proxy(proxy) for proxy in settings.proxies],
     )
     return _out(settings)
@@ -75,4 +78,6 @@ def _out(settings: ShopSettings) -> SettingsOut:
         home_city_id=settings.home_city_id,
         compete_home_city_only=settings.compete_home_city_only,
         ignore_intercity_rivals=settings.ignore_intercity_rivals,
+        test_mode=settings.test_mode,
+        raise_cooldown_minutes=settings.raise_cooldown_minutes,
     )

@@ -1282,6 +1282,7 @@ def test_an_empty_shop_is_not_feed_ready(session: Session, client: TestClient) -
         "feed_ready": False,
         "worker_enabled": False,
         "global_strategy_configured": False,
+        "test_mode": False,
     }
 
 

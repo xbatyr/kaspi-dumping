@@ -2,6 +2,7 @@ import threading
 import xml.etree.ElementTree as ET
 from collections.abc import Callable, Mapping
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any, cast
 
@@ -763,3 +764,162 @@ def test_a_dry_run_never_sends_alerts(session: Session, build_worker: Any) -> No
         worker.run_once()
 
     assert sink.messages == []
+
+
+# --- Margin first: intercity stores, raising, test mode -----------------------
+
+
+def card_from_the_screenshot() -> list[Offer]:
+    """109841597 in Astana on 2026-09-30: we deliver today, most rivals in days."""
+    def seller(merchant_id: str, price: int, intercity: bool | None) -> Offer:
+        return replace(competitor(merchant_id, price), intercity=intercity)
+
+    return [
+        seller("cyber-bro", 455555, True),
+        seller("moon", 462899, True),
+        seller(MERCHANT.merchant_id, 462900, False),
+        seller("luxe", 463000, False),
+        seller("gstore", 499990, True),
+    ]
+
+
+def changed_at(session: Session, product: Product, price: int, ago: timedelta) -> None:
+    session.add(
+        PriceHistory(
+            product_id=product.id,
+            city_id=ALMATY,
+            new_price=Decimal(price),
+            strategy_used=PricingStrategy.BEAT_FIRST,
+            reason=DecisionReason.STRATEGY_TARGET,
+            expected_position=1,
+            competitor_count=4,
+            created_at=datetime.now(UTC) - ago,
+        )
+    )
+    session.flush()
+
+
+@pytest.mark.parametrize(("raise_on", "expected"), [(False, 462900), (True, 462999)])
+def test_the_price_is_never_cut_under_a_store_that_ships_from_another_city(
+    session: Session, build_worker: Any, raise_on: bool, expected: int
+) -> None:
+    # It went 462 897 -> 455 553 under a 3-star seller delivering in three days.
+    product = make_product(session, "PC", IPHONE, cities={ALMATY: 462900},
+                           min_price=400000, max_price=520000)
+    product.auto_increase = raise_on
+    session.flush()
+    worker, _, _ = build_worker(FakeKaspiClient({(IPHONE, ALMATY): card_from_the_screenshot()}))
+
+    with worker:
+        worker.run_once()
+
+    session.expire_all()
+    # First among the local stores: kept, or raised to just under LUXE.
+    assert product.rules[0].current_price == Decimal(expected)
+
+
+def test_our_delivery_unknown_still_counts_as_local(session: Session, build_worker: Any) -> None:
+    product = make_product(session, "PC", IPHONE, cities={ALMATY: 462900},
+                           min_price=400000, max_price=520000)
+    offers = [replace(offer, intercity=None) if offer.merchant_id == MERCHANT.merchant_id else offer
+              for offer in card_from_the_screenshot()]
+    worker, _, _ = build_worker(FakeKaspiClient({(IPHONE, ALMATY): offers}))
+
+    with worker:
+        worker.run_once()
+
+    session.expire_all()
+    assert product.rules[0].current_price == Decimal(462900)
+
+
+def test_first_with_no_local_competition_goes_to_the_maximum(
+    session: Session, build_worker: Any
+) -> None:
+    product = make_product(session, "PC", IPHONE, cities={ALMATY: 462900},
+                           min_price=400000, max_price=520000)
+    product.auto_increase = True
+    session.flush()
+    offers = [offer for offer in card_from_the_screenshot() if offer.merchant_id != "luxe"]
+    worker, _, _ = build_worker(FakeKaspiClient({(IPHONE, ALMATY): offers}))
+
+    with worker:
+        worker.run_once()
+
+    session.expire_all()
+    assert product.rules[0].current_price == Decimal(520000)
+
+
+@pytest.mark.parametrize(("ago", "expected"), [(timedelta(minutes=30), 462900), (timedelta(hours=3), 462999)])
+def test_a_price_goes_up_only_once_it_has_stood_for_two_hours(
+    session: Session, build_worker: Any, ago: timedelta, expected: int
+) -> None:
+    product = make_product(session, "PC", IPHONE, cities={ALMATY: 462900},
+                           min_price=400000, max_price=520000)
+    product.auto_increase = True
+    changed_at(session, product, 462900, ago)
+    worker, _, _ = build_worker(FakeKaspiClient({(IPHONE, ALMATY): card_from_the_screenshot()}))
+
+    with worker:
+        worker.run_once()
+
+    session.expire_all()
+    assert product.rules[0].current_price == Decimal(expected)
+
+
+def test_a_cut_is_never_held_back_by_the_cooldown(session: Session, build_worker: Any) -> None:
+    product = make_product(session, "PC", IPHONE, cities={ALMATY: 462900},
+                           min_price=400000, max_price=520000)
+    product.auto_increase = True
+    changed_at(session, product, 462900, timedelta(minutes=5))
+    offers = [*card_from_the_screenshot(), replace(competitor("local", 460000), intercity=False)]
+    worker, _, _ = build_worker(FakeKaspiClient({(IPHONE, ALMATY): offers}))
+
+    with worker:
+        worker.run_once()
+
+    session.expire_all()
+    assert product.rules[0].current_price == Decimal(459999)
+
+
+def test_price_updates_say_why_the_price_moved(session: Session, build_worker: Any) -> None:
+    make_product(session, "IPH", IPHONE, cities={ALMATY: 362000})
+    sink = FakeSink()
+    worker, _, _ = build_worker(
+        FakeKaspiClient({(IPHONE, ALMATY): [competitor("rival", 361000)]}), price_updates=sink
+    )
+
+    with worker:
+        worker.run_once()
+
+    assert "на шаг дешевле: Shop rival (361 000 ₸)" in sink.messages[0]
+
+
+def test_test_mode_announces_changes_once_and_changes_nothing(
+    session: Session, build_worker: Any
+) -> None:
+    product = make_product(session, "IPH", IPHONE, cities={ALMATY: 362000})
+    load_settings(session).test_mode = True
+    session.flush()
+    ours = competitor(MERCHANT.merchant_id, 362000)
+    client = FakeKaspiClient({(IPHONE, ALMATY): [ours, competitor("rival", 361000)]})
+    sink = FakeSink()
+    worker, storage, _ = build_worker(client, price_updates=sink)
+
+    with worker:
+        first = worker.run_once()
+        second = worker.run_once()
+        client._responses = {(IPHONE, ALMATY): [ours, competitor("rival", 360000)]}
+        worker.run_once()
+
+    session.expire_all()
+    rule = product.rules[0]
+    assert rule.current_price == Decimal(362000)
+    assert session.scalar(select(func.count()).select_from(PriceHistory)) == 0
+    assert storage.published == []
+    assert (first.test_mode, first.changed, second.changed) == (True, 1, 1)
+    # The same wish is told once; a new one is told again.
+    assert len(sink.messages) == 2
+    assert "Хочу поменять" in sink.messages[0] and "362 000 ₸ → 360 999 ₸" in sink.messages[0]
+    assert "359 999 ₸" in sink.messages[1]
+    # The catalogue still sees the market.
+    assert rule.market_snapshot is not None and rule.last_evaluated_at is not None

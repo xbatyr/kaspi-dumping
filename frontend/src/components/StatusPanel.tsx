@@ -76,6 +76,7 @@ export function StatusPanel({ status, feedUrl }: { status: Status; feedUrl: stri
           </div>
         )}
 
+        {status.worker_enabled && status.test_mode && <p className="mt-3 rounded-lg bg-sky-50 p-3 text-sm text-sky-900">🧪 Тестовый режим: бот считает цены и пишет в Telegram «Хочу поменять», но сами цены не меняет. Выключается в настройках.</p>}
         {!status.worker_enabled && <p className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">Бот выключен в настройках магазина. Цены сейчас не пересчитываются.</p>}
         {!status.global_strategy_configured && <p className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">Общая стратегия не сохранена. Настройте её во вкладке «Стратегии».</p>}
         {status.global_strategy_configured && status.rules_active === 0 && <p className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">Нет товаров с включённым демпингом. Задайте Min/Max для товаров во вкладке «Стратегии».</p>}
