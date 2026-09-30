@@ -173,13 +173,11 @@ def test_duplicate_listings_keep_the_cheapest_offer_per_store() -> None:
     [[], [offer(OWN, 1500)], [offer("sister", 1500)]],
     ids=["empty", "only-own", "only-ignored"],
 )
-def test_no_competitors_keeps_the_current_price(
+def test_no_competitors_without_raising_keeps_the_current_price(
     strategy: PricingStrategy, offers: list[CompetitorOffer]
 ) -> None:
-    # 151982183 alone on its card went 3 490 000 → 4 188 000 when this jumped
-    # to max_price. With nobody to follow, the price stays.
     decision = engine.evaluate(
-        config(strategy, ignored=frozenset({"sister"})), offers, Decimal(1500)
+        no_raise(config(strategy, ignored=frozenset({"sister"}))), offers, Decimal(1500)
     )
 
     assert decision.new_price == 1500
@@ -187,6 +185,25 @@ def test_no_competitors_keeps_the_current_price(
     assert decision.reason in {DecisionReason.NO_COMPETITORS, DecisionReason.ALREADY_FIRST}
     assert decision.reference_offer is None
     assert decision.leader is None
+    assert decision.expected_position == 1
+
+
+@pytest.mark.parametrize("strategy", COMPETITIVE)
+@pytest.mark.parametrize(
+    "offers",
+    [[], [offer(OWN, 1500)], [offer("sister", 1500)]],
+    ids=["empty", "only-own", "only-ignored"],
+)
+def test_no_competitors_with_raising_goes_to_max_price(
+    strategy: PricingStrategy, offers: list[CompetitorOffer]
+) -> None:
+    # First place costs nothing, so all the margin up to max_price is taken.
+    settings = replace(config(strategy, ignored=frozenset({"sister"})), raise_when_first=True)
+
+    decision = engine.evaluate(settings, offers, Decimal(1500))
+
+    assert decision.new_price == 5000
+    assert decision.reason is DecisionReason.NO_COMPETITORS
     assert decision.expected_position == 1
 
 

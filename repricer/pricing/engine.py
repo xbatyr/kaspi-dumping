@@ -28,8 +28,8 @@ class PricingEngine:
          and duplicate listings of the same store; rank the rest.
       2. Keep the current price when it already ranks first and our offer is
          visible (unless raising towards the next store is allowed).
-      3. No competitors left: keep the current price. There is nothing to
-         follow, so there is no reason to jump to ``max_price``.
+      3. No competitors left: with raising allowed, go to ``max_price``, since
+         first place costs nothing; otherwise keep the current price.
       4. Apply the selected strategy against the leader (position 1).
       5. If that lands below ``min_price``, first place is out of reach («не
          хватает мин. цены»): keep the current price. Dropping to the floor
@@ -117,7 +117,10 @@ class PricingEngine:
             return decide(current_price, DecisionReason.ALREADY_FIRST, None)
 
         if not competitors:
-            return decide(hold(), DecisionReason.NO_COMPETITORS, None)
+            # Nobody to beat: with raising allowed the price goes to max_price,
+            # which is all the margin there is. Otherwise it stays.
+            alone = config.ceiling_price if config.auto_increase else hold()
+            return decide(alone, DecisionReason.NO_COMPETITORS, None)
 
         target, reference = _strategy_target(config, competitors, own_rating)
         if target is None:
