@@ -133,7 +133,7 @@ class RepricerBot:
     def handle(self, update: Update) -> None:
         # Approval authorization is checked against current DB settings, not a
         # list captured when this long-running process was started.
-        if update.chat_id is not None and update.callback_id and update.callback_data.startswith("price:"):
+        if update.chat_id is not None and update.callback_id and update.callback_data.startswith(("price:", "prices:")):
             self._price_button(update, update.chat_id)
             return
         if update.chat_id is None or not self._guard.allows(update):
@@ -282,9 +282,11 @@ class RepricerBot:
         with self._session_factory() as session:
             from repricer.db.settings_store import settings_or_none
             shop = settings_or_none(session)
-            authorized = shop is not None and str(chat_id) in shop.telegram_chat_ids
+            from repricer.telegram.subscriptions import can_review_prices
+            authorized = shop is not None and can_review_prices(
+                session, self._merchant.merchant_id, str(chat_id), shop.telegram_chat_ids)
         if not authorized:
-            self._api.answer_callback(update.callback_id, "Только владелец может подтверждать цены")
+            self._api.answer_callback(update.callback_id, "Сначала подпишитесь на бота: /start")
             return
         self._api.answer_callback(update.callback_id, "Проверяем актуальную цену…")
         if self._proposal_reviewer is None:
@@ -292,7 +294,7 @@ class RepricerBot:
             return
         answer = self._proposal_reviewer(proposal_id, choice == "yes", chat_id)
         # Failed market fetches are retryable: keep the original buttons.
-        if answer.startswith("Не удалось проверить"):
+        if answer.startswith("Не удалось проверить") or update.callback_data.startswith("prices:"):
             self._api.send_message(chat_id, answer)
         else:
             self._replace(update, chat_id, answer)

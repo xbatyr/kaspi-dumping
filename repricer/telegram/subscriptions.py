@@ -27,3 +27,9 @@ def subscriber_chat_ids(session: Session, merchant_id: str) -> list[int]:
         .where(TelegramSubscriber.merchant_id == merchant_id)
         .order_by(TelegramSubscriber.chat_id)
     ))
+
+
+def can_review_prices(session: Session, merchant_id: str, chat_id: str, owners: list[str]) -> bool:
+    """The business permits all subscribers, as well as configured owners."""
+    return chat_id in owners or (chat_id.lstrip("-").isdigit() and
+        session.get(TelegramSubscriber, (merchant_id, int(chat_id))) is not None)

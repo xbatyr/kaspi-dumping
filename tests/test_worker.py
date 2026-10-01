@@ -340,6 +340,25 @@ def test_intercity_rivals_can_be_left_out_of_the_competition(
     assert session.scalars(select(RepricerRule)).one().current_price == Decimal(expected)
 
 
+@pytest.mark.parametrize(("ignore", "own_days", "rival_days", "expected"), [
+    (True, 0, 1, 342988), (False, 0, 1, 283999),
+    (True, 1, 1, 283999), (True, 1, 0, 283999),
+])
+def test_local_but_slower_luxe_does_not_force_a_price_cut(
+    session: Session, build_worker: Any, ignore: bool, own_days: int, rival_days: int, expected: int
+) -> None:
+    make_product(session, "100733126_212707688", IPHONE, cities={ASTANA: 342988}, min_price=255599)
+    load_settings(session).ignore_intercity_rivals = ignore
+    session.flush()
+    ours = replace(competitor(MERCHANT.merchant_id, 342988), intercity=False, delivery_days=own_days)
+    luxe = replace(competitor("LUXE", 284000), intercity=False, delivery_days=rival_days)
+    worker, _, _ = build_worker(FakeKaspiClient({(IPHONE, ASTANA): [luxe, ours]}))
+    with worker:
+        worker.run_once()
+    session.expire_all()
+    assert session.scalars(select(RepricerRule)).one().current_price == Decimal(expected)
+
+
 def test_unchanged_price_is_reported_but_publishes_nothing(
     session: Session, build_worker: Any
 ) -> None:
@@ -925,6 +944,32 @@ def test_test_mode_announces_changes_once_and_changes_nothing(
     assert rule.market_snapshot is not None and rule.last_evaluated_at is not None
 
 
+def test_group_delivery_receipts_survive_worker_restart(session: Session, build_worker: Any) -> None:
+    from repricer.db import PriceProposal
+    from repricer.telegram.alerts import ProposalNotice
+    make_product(session, "GROUP", IPHONE, cities={ALMATY: 362000})
+    load_settings(session).test_mode = True
+    session.flush()
+    calls = []
+    class GroupSink(FakeSink):
+        def send_proposals(self, notices: list[ProposalNotice], *, on_delivered: Any) -> dict[int, list[str]]:
+            pending = [n for n in notices if "77" not in n.delivered_to]
+            calls.append([n.id for n in pending])
+            receipts = {n.id: ["77"] for n in pending}
+            on_delivered(receipts)
+            return receipts
+    client = FakeKaspiClient({(IPHONE, ALMATY): [competitor(MERCHANT.merchant_id, 362000), competitor("rival", 361000)]})
+    with build_worker(client, price_updates=GroupSink())[0] as worker:
+        worker.run_once()
+    with build_worker(client, price_updates=GroupSink())[0] as restarted:
+        restarted.run_once()
+    session.expire_all()
+    proposal = session.scalar(select(PriceProposal))
+    assert proposal is not None and proposal.delivered_to == ["77"]
+    assert calls == [[proposal.id], []]
+    assert session.scalar(select(func.count()).select_from(PriceHistory)) == 0
+
+
 def stage_test_proposal(session: Session, build_worker: Any) -> tuple[Any, Any, Any, Any]:
     from repricer.db import PriceProposal
     product = make_product(session, "REVIEW", IPHONE, cities={ALMATY: 362000})
@@ -1009,6 +1054,19 @@ def test_changed_market_does_not_apply_old_button(session: Session, build_worker
         assert "конкурентов изменились" in worker.review_proposal(proposal.id, True, 42)
     session.expire_all()
     assert proposal.status == "superseded" and storage.published == []
+
+
+def test_a_subscriber_can_approve_once_but_cannot_after_unsubscribing(session: Session, build_worker: Any) -> None:
+    from repricer.telegram.subscriptions import subscribe, unsubscribe
+    worker, storage, _, proposal = stage_test_proposal(session, build_worker)
+    subscribe(session, MERCHANT.merchant_id, 777)
+    unsubscribe(session, MERCHANT.merchant_id, 777)
+    with worker:
+        assert "Подтверждено" not in worker.review_proposal(proposal.id, True, 777)
+        subscribe(session, MERCHANT.merchant_id, 777)
+        assert "Подтверждено" in worker.review_proposal(proposal.id, True, 777)
+        assert "уже обработано" in worker.review_proposal(proposal.id, True, 42)
+    assert len(storage.published) == 1
 
 
 def test_unreachable_market_keeps_button_retryable(session: Session, build_worker: Any) -> None:

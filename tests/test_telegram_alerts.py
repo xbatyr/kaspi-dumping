@@ -9,6 +9,9 @@ from repricer.telegram.alerts import (
     AlertThrottle,
     LoggingSink,
     TelegramSink,
+    BroadcastTelegramSink,
+    ProposalNotice,
+    proposal_packets,
 )
 from repricer.telegram.formatting import render_alert
 
@@ -174,3 +177,42 @@ def test_the_logging_sink_keeps_the_alert_visible(warnings_logged: list[str]) ->
     LoggingSink().send("🛑 стоп-лосс\nIPH13-128")
 
     assert any("IPH13-128" in message for message in warnings_logged)
+
+
+def test_packets_limit_product_count_and_message_size() -> None:
+    short = [ProposalNotice(i, "Header\nProduct price\n\nFooter", frozenset()) for i in range(12)]
+    assert [len(p) for p in proposal_packets(short)] == [5, 5, 2]
+    long = [ProposalNotice(i, "Header\n" + "x" * 1200, frozenset()) for i in range(3)]
+    assert [len(p) for p in proposal_packets(long)] == [2, 1]
+
+
+def test_grouped_proposals_have_buttons_for_every_subscriber_and_retry_only_failures(
+    session: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from sqlalchemy.orm import Session
+    from repricer.telegram.subscriptions import subscribe
+    from repricer.db.settings_store import load_settings
+    load_settings(session).telegram_chat_ids = ["42"]
+    subscribe(session, "shop", 42)
+    subscribe(session, "shop", 77)
+    connection = session.connection()
+    calls: list[tuple[int, str, Any]] = []
+    def send(sink: TelegramSink, text: str, *, reply_markup: Any = None) -> bool:
+        calls.append((sink._chat_id, text, reply_markup))
+        return sink._chat_id == 42
+    monkeypatch.setattr(TelegramSink, "send", send)
+    monkeypatch.setattr("repricer.telegram.alerts.time.sleep", lambda _s: None)
+    sink = BroadcastTelegramSink("token", "shop", lambda: Session(bind=connection, join_transaction_mode="create_savepoint"))
+    notices = [ProposalNotice(i, f"Header\nSKU-{i}\n\nFooter", frozenset()) for i in (1, 2, 3)]
+    checkpoints: list[dict[int, list[str]]] = []
+    assert sink.send_proposals(notices, on_delivered=checkpoints.append) == {1: ["42"], 2: ["42"], 3: ["42"]}
+    assert checkpoints == [{1: ["42"], 2: ["42"], 3: ["42"]}]
+    assert len(calls) == 2
+    for _, text, markup in calls:
+        assert all(f"SKU-{i}" in text for i in (1, 2, 3))
+        assert len(markup["inline_keyboard"]) == 3
+        assert markup["inline_keyboard"][1][0]["callback_data"] == "prices:2:yes"
+    calls.clear()
+    delivered = [ProposalNotice(n.id, n.message, frozenset({"42"})) for n in notices]
+    assert sink.send_proposals(delivered) == {}
+    assert [c[0] for c in calls] == [77]

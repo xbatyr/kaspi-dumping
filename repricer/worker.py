@@ -53,7 +53,9 @@ from repricer.pricing import (
     PricingStrategy,
 )
 from repricer.scraper import KaspiClient, KaspiError, KaspiTransportError, ProxyPool
-from repricer.telegram.alerts import Alert, AlertKind, AlertSink, AlertThrottle
+from repricer.scraper.kaspi_client import slower_delivery
+from repricer.telegram.alerts import Alert, AlertKind, AlertSink, AlertThrottle, ProposalNotice
+from repricer.telegram.subscriptions import can_review_prices
 from repricer.telegram.formatting import city as city_name, tenge
 from repricer.telegram.formatting import render_alert
 from repricer.uploader import MerchantIdentity, PriceUpdate, SyncManager
@@ -447,7 +449,9 @@ class RepricingWorker:
                 # Unless we ship from another city ourselves, a store that does
                 # is days slower: the price is never cut under it, and where it
                 # is the only one cheaper, we count as first.
-                rivals = [offer for offer in offers if offer.intercity is not True]
+                rivals = [offer for offer in offers if offer.merchant_id == own_merchant_id or (
+                    offer.intercity is not True and
+                    (own_offer is None or not slower_delivery(offer, own_offer)))]
             competitors = [
                 CompetitorOffer(offer.merchant_id, offer.price, offer.rating) for offer in rivals
             ]
@@ -529,7 +533,8 @@ class RepricingWorker:
                     or proposal.expires_at <= datetime.now(UTC)
                     or not accepted or proposal.fingerprint != _fingerprint(accepted[0].snapshot)
                     or approved_decision is None or proposal.proposed_price != approved_decision.new_price
-                    or reviewer not in (shop.telegram_chat_ids if shop else [])):
+                    or reviewer is None or shop is None or not can_review_prices(
+                        session, self._settings.merchant.merchant_id, reviewer, shop.telegram_chat_ids)):
                     return None, set()
             if not decisions:
                 return None, set()
@@ -621,7 +626,7 @@ class RepricingWorker:
                         + f"\nЛимиты: {tenge(snapshot.config.min_price)} — {tenge(snapshot.config.max_price)}"
                         + ("\nЗакупка учтена: ниже безубыточности не продаём."
                            if snapshot.purchase_known else "\nЗакупка не указана: защита только по заданной мин. цене.")
-                        + "\n\nXML изменится только после подтверждения владельцем."
+                        + "\n\nXML изменится только после подтверждения."
                         + "\nПредложение действует 1 час; перед применением проверим Kaspi ещё раз."
                     )
                     proposal = PriceProposal(rule_id=snapshot.rule_id,
@@ -633,9 +638,25 @@ class RepricingWorker:
                     session.flush()
                 deliveries.append(proposal.id)
             session.commit()
-        for proposal_id in deliveries:
-            self._deliver_proposal(proposal_id)
+        send_proposals = getattr(self._price_updates, "send_proposals", None)
+        if send_proposals is not None and deliveries:
+            with self._session_factory() as session:
+                notices = [ProposalNotice(p.id, p.message, frozenset(p.delivered_to))
+                    for p in session.scalars(select(PriceProposal).where(
+                        PriceProposal.id.in_(deliveries), PriceProposal.status == "pending"))]
+            send_proposals(notices, on_delivered=self._record_proposal_deliveries)
+        else:
+            for proposal_id in deliveries:
+                self._deliver_proposal(proposal_id)
         return wanted
+
+    def _record_proposal_deliveries(self, receipts: dict[int, list[str]]) -> None:
+        """Checkpoint each packet instead of resending a whole cycle after a crash."""
+        with self._session_factory() as session:
+            for proposal in session.scalars(select(PriceProposal).where(
+                PriceProposal.id.in_(receipts)).with_for_update()):
+                proposal.delivered_to = sorted(set(proposal.delivered_to) | set(receipts[proposal.id]))
+            session.commit()
 
     def _deliver_proposal(self, proposal_id: int) -> None:
         if self._price_updates is None:
@@ -656,11 +677,12 @@ class RepricingWorker:
             session.commit()
 
     def review_proposal(self, proposal_id: int, approve: bool, chat_id: int) -> str:
-        """An owner click always rechecks both the market and the saved rule."""
+        """A subscriber click always rechecks both the market and the saved rule."""
         with self._session_factory() as session:
             shop = session.scalar(select(ShopSettings).with_for_update())
-            if shop is None or str(chat_id) not in shop.telegram_chat_ids:
-                return "⛔ Подтверждать цены может только владелец магазина."
+            if shop is None or not can_review_prices(
+                session, self._settings.merchant.merchant_id, str(chat_id), shop.telegram_chat_ids):
+                return "⛔ Подпишитесь на бота командой /start, чтобы подтверждать цены."
             proposal = session.get(PriceProposal, proposal_id, with_for_update=True)
             if proposal is None or proposal.merchant_id != self._settings.merchant.merchant_id:
                 return "Предложение не найдено."
@@ -878,6 +900,7 @@ def _fingerprint(snapshot: RuleSnapshot) -> str:
     values.update(rule_id=snapshot.rule_id, sku=snapshot.sku, card=snapshot.kaspi_product_id,
                   city=snapshot.city_id, price=snapshot.current_price, intercity=snapshot.ignore_intercity,
                   purchase_known=snapshot.purchase_known)
+    values["pricing_policy"] = "door-delivery-v2"
     raw = json.dumps(values, sort_keys=True, default=str)
     return hashlib.sha256(raw.encode()).hexdigest()
 

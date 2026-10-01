@@ -1,11 +1,13 @@
 import json
 from decimal import Decimal
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from repricer.scraper import KaspiResponseError, Offer, parse_offer, parse_offers_page
+from repricer.scraper.kaspi_client import slower_delivery
 
 # A trimmed real response (product 102298404, Almaty, 2026-09-18).
 FIXTURE = Path(__file__).parent / "fixtures" / "kaspi_offers_page.json"
@@ -43,6 +45,35 @@ def test_empty_page_is_valid() -> None:
 
     assert page.offers == ()
     assert (page.raw_count, page.total) == (0, 0)
+
+
+def test_door_delivery_is_not_confused_with_local_pickup() -> None:
+    ours = parse_offer(raw_offer(deliveryDuration="TOMORROW", deliveryOptions={
+        "TO_DOOR": {"deliveryDays": 0, "interCity": False}}))
+    luxe = parse_offer(raw_offer(deliveryDuration="TILL_2_DAYS", deliveryOptions={
+        "TO_DOOR": {"deliveryDays": 1, "interCity": False},
+        "PICKUP": {"deliveryDays": 0, "interCity": False}}))
+    assert luxe.intercity is False
+    assert luxe.delivery_days == 1 and ours.delivery_days == 0
+    assert slower_delivery(luxe, ours)
+    assert not slower_delivery(ours, luxe)
+    # Exact channel data takes precedence over an approximate bucket.
+    assert not slower_delivery(replace(luxe, delivery_days=0), ours)
+
+
+@pytest.mark.parametrize("days", [None, True, -1, "1", 1.5])
+def test_malformed_delivery_days_are_unknown(days: object) -> None:
+    offer = parse_offer(raw_offer(deliveryDuration=None, deliveryOptions={"TO_DOOR": {"deliveryDays": days}}))
+    ours = parse_offer(raw_offer(deliveryDuration="TOMORROW"))
+    assert offer.delivery_days is None
+    assert not slower_delivery(offer, ours)
+
+
+def test_duration_bucket_fallback_excludes_only_known_slower_sellers() -> None:
+    ours = parse_offer(raw_offer(deliveryDuration="TOMORROW"))
+    assert slower_delivery(parse_offer(raw_offer(deliveryDuration="TILL_5_DAYS")), ours)
+    assert not slower_delivery(parse_offer(raw_offer(deliveryDuration="TODAY")), ours)
+    assert not slower_delivery(parse_offer(raw_offer(deliveryDuration="UNKNOWN")), ours)
 
 
 def test_missing_optional_fields_become_unknown(warnings_logged: list[str]) -> None:

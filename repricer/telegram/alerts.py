@@ -63,6 +63,35 @@ class AlertSink(Protocol):
     def send(self, text: str) -> bool | None: ...
 
 
+@dataclass(frozen=True, slots=True)
+class ProposalNotice:
+    id: int
+    message: str
+    delivered_to: frozenset[str]
+
+
+def proposal_packets(notices: list[ProposalNotice]) -> list[list[ProposalNotice]]:
+    """Five individually reviewable products, safely below Telegram's limit."""
+    packets: list[list[ProposalNotice]] = []
+    current: list[ProposalNotice] = []
+    length = 300
+    for notice in notices:
+        size = len(_proposal_body(notice)) + 20
+        if current and (len(current) == 5 or length + size > 3500):
+            packets.append(current)
+            current, length = [], 300
+        current.append(notice)
+        length += size
+    if current:
+        packets.append(current)
+    return packets
+
+
+def _proposal_body(notice: ProposalNotice) -> str:
+    # Existing proposals keep their stored legacy text for audit and approval.
+    return notice.message.split("\n", 1)[-1].split("\n\n", 1)[0]
+
+
 class AlertThrottle:
     """Remembers which conditions are already reported.
 
@@ -155,10 +184,41 @@ class BroadcastTelegramSink:
             pause = 1.05 - (time.monotonic() - self._last_proposal_sent.get(chat_id, 0))
             if pause > 0:
                 time.sleep(pause)
-            if TelegramSink(self._token, chat_id).send(text, reply_markup=keyboard if chat_id in owners else None):
+            if TelegramSink(self._token, chat_id).send(text, reply_markup=keyboard):
                 sent.append(str(chat_id))
                 self._last_proposal_sent[chat_id] = time.monotonic()
         return sent
+
+    def send_proposals(self, notices: list[ProposalNotice], *,
+                       on_delivered: Callable[[dict[int, list[str]]], None] | None = None) -> dict[int, list[str]]:
+        with self._session_factory() as session:
+            shop = settings_or_none(session)
+            owners = {int(c) for c in (shop.telegram_chat_ids if shop else []) if c.lstrip("-").isdigit()}
+            recipients = set(subscriber_chat_ids(session, self._merchant_id)) | owners
+        receipts: dict[int, list[str]] = {}
+        for chat_id in sorted(recipients):
+            pending = [n for n in notices if str(chat_id) not in n.delivered_to]
+            for packet in proposal_packets(pending):
+                text = "🧪 <b>Тестовый режим. Предлагаю цены:</b>\n\n"
+                keyboard: dict[str, Any] = {"inline_keyboard": []}
+                for number, notice in enumerate(packet, 1):
+                    text += f"<b>{number}.</b> {_proposal_body(notice)}\n\n"
+                    keyboard["inline_keyboard"].append([
+                        {"text": f"✅ {number}. Да", "callback_data": f"prices:{notice.id}:yes"},
+                        {"text": f"❌ {number}. Нет", "callback_data": f"prices:{notice.id}:no"},
+                    ])
+                text += "Выберите «Да» или «Нет» для каждого товара.\nБез подтверждения XML не изменится.\nСрок: 1 час. Перед записью проверим Kaspi."
+                pause = 1.05 - (time.monotonic() - self._last_proposal_sent.get(chat_id, 0))
+                if pause > 0:
+                    time.sleep(pause)
+                if TelegramSink(self._token, chat_id).send(text, reply_markup=keyboard):
+                    packet_receipts = {notice.id: [str(chat_id)] for notice in packet}
+                    if on_delivered is not None:
+                        on_delivered(packet_receipts)
+                    for notice in packet:
+                        receipts.setdefault(notice.id, []).append(str(chat_id))
+                self._last_proposal_sent[chat_id] = time.monotonic()
+        return receipts
 
 
 class LoggingSink:

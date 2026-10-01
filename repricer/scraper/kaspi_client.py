@@ -78,6 +78,8 @@ class Offer:
     delivery_duration: str | None
     #: «Доставка межгород»: shipped from another city. None when Kaspi did not say.
     intercity: bool | None = None
+    #: Door delivery in calendar days, independent of pickup availability.
+    delivery_days: int | None = None
 
 
 class KaspiError(Exception):
@@ -163,7 +165,35 @@ def parse_offer(raw: object) -> Offer:
         kaspi_delivery=_optional(raw, "kaspiDelivery", _parse_bool) or False,
         delivery_duration=_optional(raw, "deliveryDuration", _parse_text),
         intercity=_intercity(raw.get("deliveryOptions")),
+        delivery_days=_door_delivery_days(raw.get("deliveryOptions")),
     )
+
+
+def _door_delivery_days(options: object) -> int | None:
+    if not isinstance(options, dict):
+        return None
+    door = options.get("TO_DOOR")
+    if not isinstance(door, dict):
+        return None
+    days = door.get("deliveryDays")
+    return days if isinstance(days, int) and not isinstance(days, bool) and days >= 0 else None
+
+
+def slower_delivery(offer: Offer, ours: Offer) -> bool:
+    """Only exclude delivery we can positively identify as slower.
+
+    Compare the same channel. Local pickup must not hide slow door delivery.
+    Use exact days when both are available, then Kaspi's duration buckets.
+    Unknown timing stays in the competition.
+    """
+    if offer.delivery_days is not None and ours.delivery_days is not None:
+        return offer.delivery_days > ours.delivery_days
+    buckets = {"EXPRESS": 0, "TODAY": 0, "TOMORROW": 1,
+               "TILL_2_DAYS": 2, "TILL_3_DAYS": 3, "TILL_4_DAYS": 4,
+               "TILL_5_DAYS": 5, "TILL_7_DAYS": 7, "OVER_7_DAYS": 8}
+    rival_days = buckets.get(offer.delivery_duration or "")
+    own_days = buckets.get(ours.delivery_duration or "")
+    return rival_days is not None and own_days is not None and rival_days > own_days
 
 
 def _intercity(options: object) -> bool | None:

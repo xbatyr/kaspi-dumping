@@ -596,6 +596,25 @@ def test_malformed_price_buttons_do_not_write(session: Session, session_factory:
     assert api.edited == [] and api.answered
 
 
+def test_subscriber_group_button_keeps_other_products_reviewable(session: Session, session_factory: Any) -> None:
+    from repricer.telegram.subscriptions import subscribe
+    from repricer.db.settings_store import load_settings
+    load_settings(session)
+    subscribe(session, MERCHANT, 777)
+    api = FakeTelegram()
+    bot = build_bot(session_factory, api)
+    called = []
+    def review(proposal_id: int, approve: bool, chat_id: int) -> str:
+        called.append((proposal_id, approve, chat_id))
+        return "Отклонено"
+    bot._proposal_reviewer = review
+    bot.handle(Update(chat_id=777, callback_id="a", callback_data="prices:9:no", message_id=5))
+    bot.handle(Update(chat_id=777, callback_id="b", callback_data="prices:10:yes", message_id=5))
+    assert called == [(9, False, 777), (10, True, 777)]
+    assert api.edited == []
+    assert len(api.sent) == 2
+
+
 def test_a_stranger_can_subscribe_and_nothing_more(session: Session, session_factory: Any) -> None:
     api = FakeTelegram()
     bot = build_bot(session_factory, api)
