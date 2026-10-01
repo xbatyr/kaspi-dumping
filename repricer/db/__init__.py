@@ -1,6 +1,7 @@
 from repricer.db.base import Base
 from repricer.db.models import (
     PriceHistory,
+    PriceProposal,
     Product,
     ProductAvailability,
     RepricerRule,
@@ -12,6 +13,7 @@ from repricer.db.queries import latest_changes
 __all__ = [
     "Base",
     "PriceHistory",
+    "PriceProposal",
     "Product",
     "ProductAvailability",
     "RepricerRule",

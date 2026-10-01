@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import threading
 import time
+import hashlib
+import json
 from html import escape
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Sequence
@@ -38,7 +40,8 @@ from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from repricer.db.models import Product, RepricerRule, ShopSettings
+from repricer.db.models import PriceProposal, Product, RepricerRule, ShopSettings
+from repricer.pricing.margin import break_even_price
 from repricer.db.queries import latest_changes
 from repricer.db.settings_store import settings_or_none
 from repricer.pricing import (
@@ -95,6 +98,7 @@ class RuleSnapshot:
     #: bot's last change, so it, not the older price Kaspi still shows, is the
     #: price to work from until Kaspi fetches the feed.
     price_set_by_hand: bool = False
+    purchase_known: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,8 +166,6 @@ class RepricingWorker:
         self._local = threading.local()
         self._clients: list[KaspiClient] = []
         self._clients_lock = threading.Lock()
-        #: Test mode: the change last announced per rule, so it is told once.
-        self._announced: dict[int, tuple[Decimal | None, Decimal]] = {}
 
     def __enter__(self) -> RepricingWorker:
         return self
@@ -202,6 +204,11 @@ class RepricingWorker:
         )
 
         outcomes = self._price_all(by_city)
+        # A scrape can take minutes. The owner's current switch wins over the
+        # value read at the start; _write checks it again under a row lock.
+        with self._session_factory() as session:
+            shop = settings_or_none(session)
+            test_mode = shop.test_mode if shop is not None else test_mode
         decided = [outcome for outcome in outcomes if outcome.decision is not None]
         unreachable = sum(1 for outcome in outcomes if outcome.unreachable)
         changed = sum(
@@ -355,6 +362,14 @@ class RepricingWorker:
                     auto_decrease=product.auto_decrease,
                     auto_increase=may_raise,
                     raise_when_first=may_raise)
+                inputs = shop.margin_inputs(rule.max_price, product)
+                if inputs.commission_percent + inputs.tax_percent >= 100:
+                    raise ValueError("commission and tax leave no safe selling price")
+                safe_floor = break_even_price(inputs)
+                if safe_floor is not None:
+                    if safe_floor > config.max_price:
+                        raise ValueError(f"break-even {safe_floor} is above maximum {config.max_price}")
+                    config = replace(config, min_price=max(config.min_price, safe_floor))
             except ValueError as exc:
                 # A rule the API could not have saved, or one whose product lost
                 # its base price. Skipping it beats failing the whole cycle.
@@ -375,6 +390,7 @@ class RepricingWorker:
                     config=config,
                     last_position=change.expected_position if change else None,
                     ignore_intercity=shop.ignore_intercity_rivals,
+                    purchase_known=product.purchase_price is not None,
                     # The bot writes history with every price it sets, so a feed
                     # price that differs from its last one came from elsewhere.
                     price_set_by_hand=(
@@ -480,13 +496,43 @@ class RepricingWorker:
             logger.exception("sku={} city={}: unexpected failure", snapshot.sku, snapshot.city_id)
             return TaskOutcome(snapshot, skipped=f"unexpected {type(exc).__name__}: {exc}")
 
-    def _write(self, decided: Sequence[TaskOutcome]) -> tuple[str | None, set[int]]:
+    def _fresh_decisions(self, session: Session, decided: Sequence[TaskOutcome]) -> list[TaskOutcome]:
+        """Drop decisions made before a manual edit, pause, or settings change."""
+        session.scalars(select(RepricerRule).where(
+            RepricerRule.id.in_([o.snapshot.rule_id for o in decided])
+        ).order_by(RepricerRule.id).with_for_update()).all()
+        fresh, _ = self._load_rules(session)
+        fingerprints = {s.rule_id: _fingerprint(s) for s in fresh}
+        return [o for o in decided if fingerprints.get(o.snapshot.rule_id) == _fingerprint(o.snapshot)]
+
+    def _write(self, decided: Sequence[TaskOutcome], *, proposal_id: int | None = None,
+               reviewer: str | None = None) -> tuple[str | None, set[int]]:
         decisions = {
             outcome.snapshot.rule_id: outcome.decision
             for outcome in decided
             if outcome.decision is not None
         }
         with self._session_factory() as session:
+            shop = session.scalar(select(ShopSettings).with_for_update())
+            if shop is not None and (
+                (shop.global_strategy is not None and not shop.worker_enabled)
+                or (shop.test_mode and proposal_id is None)
+                or (proposal_id is not None and not shop.test_mode)
+            ):
+                return None, set()
+            accepted = self._fresh_decisions(session, decided)
+            decisions = {o.snapshot.rule_id: o.decision for o in accepted if o.decision is not None}
+            proposal = session.get(PriceProposal, proposal_id, with_for_update=True) if proposal_id else None
+            if proposal_id is not None:
+                approved_decision = accepted[0].decision if accepted else None
+                if (proposal is None or proposal.status != "pending"
+                    or proposal.expires_at <= datetime.now(UTC)
+                    or not accepted or proposal.fingerprint != _fingerprint(accepted[0].snapshot)
+                    or approved_decision is None or proposal.proposed_price != approved_decision.new_price
+                    or reviewer not in (shop.telegram_chat_ids if shop else [])):
+                    return None, set()
+            if not decisions:
+                return None, set()
             rules = session.scalars(
                 select(RepricerRule).where(RepricerRule.id.in_(decisions))
             ).all()
@@ -508,6 +554,10 @@ class RepricingWorker:
             result = self._sync_manager_factory(session).sync(
                 session, self._settings.merchant, updates
             )
+            if proposal is not None:
+                proposal.status = "applied"
+                proposal.reviewed_at = datetime.now(UTC)
+                proposal.reviewed_by = reviewer
             session.commit()
             if len(applied_ids) != result.applied:
                 logger.warning("Applied-price count changed during sync; suppressing uncertain notifications")
@@ -535,34 +585,120 @@ class RepricingWorker:
             session.commit()
 
     def _announce_intended_changes(self, decided: Sequence[TaskOutcome]) -> int:
-        """«Хочу поменять»: the changes test mode holds back, each told once.
+        """Persist wishes before delivery; restart and rejection never spam."""
+        deliveries: list[int] = []
+        wanted = 0
+        now = datetime.now(UTC)
+        with self._session_factory() as session:
+            shop = session.scalar(select(ShopSettings).with_for_update())
+            if shop is None or not shop.test_mode or (shop.global_strategy and not shop.worker_enabled):
+                return 0
+            for outcome in self._fresh_decisions(session, decided):
+                decision, snapshot = outcome.decision, outcome.snapshot
+                if decision is None:
+                    continue
+                latest = session.scalar(select(PriceProposal).where(
+                    PriceProposal.rule_id == snapshot.rule_id
+                ).order_by(PriceProposal.id.desc()).limit(1))
+                if decision.new_price == snapshot.current_price:
+                    if latest is not None and latest.status == "pending":
+                        latest.status = "superseded"
+                    continue
+                wanted += 1
+                fingerprint = _fingerprint(snapshot)
+                same = (latest is not None and latest.fingerprint == fingerprint
+                        and latest.proposed_price == decision.new_price)
+                if same and latest is not None and latest.status == "rejected":
+                    continue
+                if same and latest is not None and latest.status == "pending" and latest.expires_at > now:
+                    proposal = latest
+                else:
+                    if latest is not None and latest.status == "pending":
+                        latest.status = "superseded"
+                    text = (
+                        "🧪 <b>Тестовый режим. Хочу поменять:</b>\n"
+                        + _change_line(outcome, snapshot.current_price)
+                        + f"\nЛимиты: {tenge(snapshot.config.min_price)} — {tenge(snapshot.config.max_price)}"
+                        + ("\nЗакупка учтена: ниже безубыточности не продаём."
+                           if snapshot.purchase_known else "\nЗакупка не указана: защита только по заданной мин. цене.")
+                        + "\n\nXML изменится только после подтверждения владельцем."
+                        + "\nПредложение действует 1 час; перед применением проверим Kaspi ещё раз."
+                    )
+                    proposal = PriceProposal(rule_id=snapshot.rule_id,
+                        merchant_id=self._settings.merchant.merchant_id,
+                        fingerprint=fingerprint, current_price=snapshot.current_price,
+                        proposed_price=decision.new_price, message=text,
+                        expires_at=now + timedelta(hours=1))
+                    session.add(proposal)
+                    session.flush()
+                deliveries.append(proposal.id)
+            session.commit()
+        for proposal_id in deliveries:
+            self._deliver_proposal(proposal_id)
+        return wanted
 
-        The same change would come up every cycle for as long as the market
-        stands still, so it is announced when it first appears or when it
-        differs from the last one announced for that rule.
-        """
-        wanted: list[TaskOutcome] = []
-        fresh: list[TaskOutcome] = []
-        for outcome in decided:
-            decision, rule_id = outcome.decision, outcome.snapshot.rule_id
-            if decision is None or not decision.changed:
-                self._announced.pop(rule_id, None)
-                continue
-            wanted.append(outcome)
-            key = (decision.previous_price, decision.new_price)
-            if self._announced.get(rule_id) != key:
-                self._announced[rule_id] = key
-                fresh.append(outcome)
-        self._broadcast(
-            "🧪 <b>Тестовый режим. Хочу поменять:</b>\n"
-            "<i>Цены не меняются, пока режим включён в настройках.</i>\n",
-            [
-                _change_line(outcome, outcome.decision.previous_price)
-                for outcome in fresh
-                if outcome.decision is not None
-            ],
-        )
-        return len(wanted)
+    def _deliver_proposal(self, proposal_id: int) -> None:
+        if self._price_updates is None:
+            return
+        with self._session_factory() as session:
+            proposal = session.get(PriceProposal, proposal_id)
+            if proposal is None or proposal.status != "pending":
+                return
+            send_proposal = getattr(self._price_updates, "send_proposal", None)
+            if send_proposal is not None:
+                delivered = send_proposal(proposal.message, proposal.id, set(proposal.delivered_to))
+            elif "sink" not in proposal.delivered_to:
+                result = self._price_updates.send(proposal.message)
+                delivered = ["sink"] if result is not False else []
+            else:
+                delivered = []
+            proposal.delivered_to = sorted(set(proposal.delivered_to) | set(delivered))
+            session.commit()
+
+    def review_proposal(self, proposal_id: int, approve: bool, chat_id: int) -> str:
+        """An owner click always rechecks both the market and the saved rule."""
+        with self._session_factory() as session:
+            shop = session.scalar(select(ShopSettings).with_for_update())
+            if shop is None or str(chat_id) not in shop.telegram_chat_ids:
+                return "⛔ Подтверждать цены может только владелец магазина."
+            proposal = session.get(PriceProposal, proposal_id, with_for_update=True)
+            if proposal is None or proposal.merchant_id != self._settings.merchant.merchant_id:
+                return "Предложение не найдено."
+            if proposal.status != "pending":
+                return "Это предложение уже обработано или заменено новым."
+            if not shop.worker_enabled or not shop.test_mode or proposal.expires_at <= datetime.now(UTC):
+                proposal.status = "expired"
+                session.commit()
+                return "Предложение устарело или бот выключен. Дождитесь нового расчёта."
+            if not approve:
+                proposal.status = "rejected"
+                proposal.reviewed_by = str(chat_id)
+                proposal.reviewed_at = datetime.now(UTC)
+                session.commit()
+                return "❌ Отклонено. Цена в XML не изменилась."
+            snapshots, _ = self._load_rules(session)
+            snapshot = next((s for s in snapshots if s.rule_id == proposal.rule_id), None)
+            if snapshot is None or _fingerprint(snapshot) != proposal.fingerprint:
+                proposal.status = "superseded"
+                session.commit()
+                return "Настройки или цена товара изменились. Дождитесь нового предложения."
+            text, target = proposal.message, proposal.proposed_price
+        # Never hold a database transaction during a network call.
+        outcome = self._price_one(snapshot)
+        if outcome.decision is None:
+            return "Не удалось проверить Kaspi. Цена не изменена; попробуйте подтвердить позже."
+        if outcome.decision.new_price != target:
+            with self._session_factory() as session:
+                proposal = session.get(PriceProposal, proposal_id, with_for_update=True)
+                if proposal is not None and proposal.status == "pending":
+                    proposal.status = "superseded"
+                    session.commit()
+            return "Цены конкурентов изменились. Старое предложение отменено; дождитесь нового расчёта."
+        _, applied = self._write([outcome], proposal_id=proposal_id, reviewer=str(chat_id))
+        if not applied:
+            return "Предложение уже обработано или настройки изменились. Цена не изменена."
+        self._notify_price_changes([outcome], applied)
+        return text.split("\n\n", 1)[0] + "\n\n✅ Подтверждено. Цена записана в XML; Kaspi применит её при загрузке прайса."
 
     def _broadcast(self, header: str, lines: Sequence[str]) -> None:
         """Send lines under one header, split to stay under Telegram's limit."""
@@ -733,6 +869,17 @@ def _why(outcome: TaskOutcome) -> str | None:
             return "фиксированная цена"
         case _:
             return None
+
+
+def _fingerprint(snapshot: RuleSnapshot) -> str:
+    from dataclasses import asdict
+    values = asdict(snapshot.config)
+    values["ignored_merchants"] = sorted(snapshot.config.ignored_merchants)
+    values.update(rule_id=snapshot.rule_id, sku=snapshot.sku, card=snapshot.kaspi_product_id,
+                  city=snapshot.city_id, price=snapshot.current_price, intercity=snapshot.ignore_intercity,
+                  purchase_known=snapshot.purchase_known)
+    raw = json.dumps(values, sort_keys=True, default=str)
+    return hashlib.sha256(raw.encode()).hexdigest()
 
 
 def _money(amount: Decimal | None) -> str:

@@ -44,6 +44,7 @@ def test_schema_compiles_for_postgres() -> None:
         "products",
         "repricer_rules",
         "price_history",
+        "price_proposals",
         "product_availabilities",
         "shop_settings",
         "telegram_subscribers",

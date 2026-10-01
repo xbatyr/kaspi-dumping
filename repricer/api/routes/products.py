@@ -245,6 +245,7 @@ def import_algatop(
     session: SessionDep,
     merchant: MerchantDep,
     preview: bool = False,
+    prices_only: bool = False,
 ) -> AlgaTopImportOut:
     """Carry every product over from AlgaTop exactly as it stands there.
 
@@ -296,6 +297,21 @@ def import_algatop(
     switched_on: list[str] = []
     for row in rows:
         product = known.get(row.sku)
+        if prices_only:
+            rule = _rule_for_city(product, row.city_id)
+            if product is None or rule is None:
+                not_found.append(f"{row.sku} / {row.city_id}")
+                continue
+            before = rule.current_price
+            rule.current_price = row.price
+            touched.add(row.sku)
+            if before != row.price:
+                prices_changed += 1
+                changes.append(AlgaTopChangeOut(sku=row.sku, title=product.title,
+                    city_id=row.city_id, price_before=before, price_after=row.price,
+                    min_before=rule.min_price, min_after=rule.min_price,
+                    max_before=rule.max_price, max_after=rule.max_price))
+            continue
         if product is None and (only_store is None or not row.kaspi_product_id):
             not_found.append(row.sku)
             continue

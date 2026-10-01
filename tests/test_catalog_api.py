@@ -27,7 +27,7 @@ def client(session: Session) -> Iterator[TestClient]:
     app.dependency_overrides[get_session] = lambda: session
     app.dependency_overrides[get_merchant] = lambda: MERCHANT
     app.dependency_overrides[get_settings] = lambda: ApiSettings(
-        **{"_env_file": None, "repricer_api_key": API_KEY}
+        **{"_env_file": None, "repricer_api_key": API_KEY}  # type: ignore[arg-type]
     )
     with TestClient(app, headers={"X-API-Key": API_KEY}) as test_client:
         yield test_client
@@ -992,3 +992,28 @@ def test_a_request_that_asks_for_nothing_is_refused(client: TestClient, session:
     add_product(session, "A")
 
     assert client.post("/api/tools/bulk", json={}).status_code == 422
+
+
+def test_algatop_prices_only_preserves_stock_limits_cost_and_pauses(client: TestClient, session: Session) -> None:
+    product = add_product(session, "ONLY-PRICE", purchase_price=80000, stock=9)
+    product.auto_increase = True
+    product.rules[0].is_active = False
+    session.flush()
+    content = _algatop_file(_algatop_row("ONLY-PRICE", 105000, 50000, 130000,
+        cost=95000, stock=1, status="Снято с продажи", step=100))
+    url = "/api/products/import-algatop?prices_only=true"
+    preview = client.post(url + "&preview=true", content=content,
+        headers={"Content-Type": "application/octet-stream"})
+    assert preview.status_code == 200 and preview.json()["prices_changed"] == 1
+    session.expire_all()
+    assert product.rules[0].current_price == Decimal(100000)
+    response = client.post(url, content=content, headers={"Content-Type": "application/octet-stream"})
+    assert response.status_code == 200
+    session.expire_all()
+    assert product.rules[0].current_price == Decimal(105000)
+    assert product.rules[0].min_price == Decimal(90000)
+    assert product.rules[0].max_price == Decimal(110000)
+    assert product.rules[0].is_active is False
+    assert product.is_active and product.auto_increase
+    assert product.purchase_price == Decimal(80000) and product.base_price == Decimal(100000)
+    assert product.availabilities[0].stock_count == 9

@@ -32,7 +32,7 @@ engine = PricingEngine()
     (3000, 2000, True, False, 1999),
     (6000, 3000, False, False, 2999),
 ])
-def test_direction_controls(current, rival, down, up, expected):
+def test_direction_controls(current: int, rival: int, down: bool, up: bool, expected: int) -> None:
     settings = replace(config(), auto_decrease=down, auto_increase=up, raise_when_first=up)
     decision = engine.evaluate(settings, [offer(OWN, current), offer("rival", rival)], Decimal(current))
     assert decision.new_price == expected

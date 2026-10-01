@@ -55,6 +55,29 @@ def _str_enum(enum_cls: type[StrEnum], name: str) -> SAEnum:
     )
 
 
+class PriceProposal(Base):
+    """One persistent, owner-reviewed test-mode price change."""
+
+    __tablename__ = "price_proposals"
+    __table_args__ = (
+        Index("ix_price_proposals_rule_created", "rule_id", "id"),
+        CheckConstraint("status IN ('pending','rejected','applied','superseded','expired')", name="proposal_status"),
+    )
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    rule_id: Mapped[int] = mapped_column(ForeignKey("repricer_rules.id", ondelete="CASCADE"))
+    merchant_id: Mapped[str] = mapped_column(String(64))
+    fingerprint: Mapped[str] = mapped_column(String(64))
+    current_price: Mapped[Decimal | None]
+    proposed_price: Mapped[Decimal]
+    message: Mapped[str] = mapped_column(String(4000))
+    status: Mapped[str] = mapped_column(String(16), default="pending", server_default="pending")
+    delivered_to: Mapped[list[str]] = mapped_column(MutableList.as_mutable(ARRAY(String(32))), server_default=text("'{}'"), default=list)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    expires_at: Mapped[datetime]
+    reviewed_at: Mapped[datetime | None]
+    reviewed_by: Mapped[str | None] = mapped_column(String(32))
+
+
 class TimestampMixin:
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
@@ -217,8 +240,8 @@ class ShopSettings(TimestampMixin, Base):
     #: ourselves, stores that do are left out of the competition, so the bot
     #: never cuts the price under a rival who is days slower. On by default.
     ignore_intercity_rivals: Mapped[bool] = mapped_column(server_default=true())
-    #: «Тестовый режим»: the bot works out every price and says in Telegram what
-    #: it would change, but no price, history row or feed is written.
+    #: «Тестовый режим»: prices are proposed in Telegram; only the owner's
+    #: confirmation may change the XML price and write history.
     test_mode: Mapped[bool] = mapped_column(server_default=false())
     #: A price goes up only once it has stood this long since its last change,
     #: so a cut is not undone on the next pass. Cuts are never delayed.

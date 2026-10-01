@@ -60,7 +60,7 @@ def test_messages_go_out_as_html_with_their_buttons(server: FakeBotApi) -> None:
             "chat_id": 42, "text": "<b>Привет</b>", "parse_mode": "HTML",
             "disable_web_page_preview": True, "reply_markup": keyboard,
         }),
-        (f"/bot{TOKEN}/editMessageText", {"chat_id": 42, "message_id": 7, "text": "Готово", "parse_mode": "HTML"}),
+        (f"/bot{TOKEN}/editMessageText", {"chat_id": 42, "message_id": 7, "text": "Готово", "parse_mode": "HTML", "reply_markup": {"inline_keyboard": []}}),
         (f"/bot{TOKEN}/answerCallbackQuery", {"callback_query_id": "99", "text": "Ок"}),
     ]
 

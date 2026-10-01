@@ -923,3 +923,166 @@ def test_test_mode_announces_changes_once_and_changes_nothing(
     assert "359 999 ₸" in sink.messages[1]
     # The catalogue still sees the market.
     assert rule.market_snapshot is not None and rule.last_evaluated_at is not None
+
+
+def stage_test_proposal(session: Session, build_worker: Any) -> tuple[Any, Any, Any, Any]:
+    from repricer.db import PriceProposal
+    product = make_product(session, "REVIEW", IPHONE, cities={ALMATY: 362000})
+    shop = load_settings(session)
+    shop.test_mode = shop.worker_enabled = True
+    shop.telegram_chat_ids = ["42"]
+    session.flush()
+    client = FakeKaspiClient({(IPHONE, ALMATY): [
+        competitor(MERCHANT.merchant_id, 362000), competitor("rival", 361000)]})
+    sink = FakeSink()
+    worker, storage, _ = build_worker(client, price_updates=sink)
+    worker.run_once()
+    proposal = session.scalar(select(PriceProposal))
+    assert proposal is not None
+    return worker, storage, client, proposal
+
+
+def test_owner_can_apply_once_and_duplicate_click_cannot_write(session: Session, build_worker: Any) -> None:
+    worker, storage, _, proposal = stage_test_proposal(session, build_worker)
+    with worker:
+        assert "Подтверждено" in worker.review_proposal(proposal.id, True, 42)
+        assert "уже обработано" in worker.review_proposal(proposal.id, True, 42)
+    session.expire_all()
+    assert proposal.status == "applied"
+    assert session.scalar(select(RepricerRule.current_price)) == Decimal(360999)
+    assert session.scalar(select(func.count()).select_from(PriceHistory)) == 1
+    assert len(storage.published) == 1
+
+
+def test_rejection_survives_worker_restart(session: Session, build_worker: Any) -> None:
+    from repricer.db import PriceProposal
+    worker, storage, client, proposal = stage_test_proposal(session, build_worker)
+    with worker:
+        assert "Отклонено" in worker.review_proposal(proposal.id, False, 42)
+    sink = FakeSink()
+    restarted, _, _ = build_worker(client, price_updates=sink)
+    with restarted:
+        restarted.run_once()
+    session.expire_all()
+    assert proposal.status == "rejected"
+    assert sink.messages == [] and storage.published == []
+    assert session.scalar(select(func.count()).select_from(PriceProposal)) == 1
+
+
+@pytest.mark.parametrize("change", ["price", "min", "pause", "product_pause", "test_off", "bot_off", "expired", "owner_removed"])
+def test_stale_or_unauthorized_proposal_never_changes_price(
+    session: Session, build_worker: Any, change: str
+) -> None:
+    worker, storage, _, proposal = stage_test_proposal(session, build_worker)
+    session.expire_all()
+    rule = session.scalar(select(RepricerRule))
+    assert rule is not None
+    shop = load_settings(session)
+    if change == "price":
+        rule.current_price = Decimal(400000)
+    elif change == "min":
+        rule.min_price = Decimal(360500)
+    elif change == "pause":
+        rule.is_active = False
+    elif change == "product_pause":
+        rule.product.is_active = False
+    elif change == "test_off":
+        shop.test_mode = False
+    elif change == "bot_off":
+        shop.worker_enabled = False
+    elif change == "expired":
+        proposal.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    elif change == "owner_removed":
+        shop.telegram_chat_ids = []
+    session.flush()
+    with worker:
+        answer = worker.review_proposal(proposal.id, True, 42)
+    assert "Подтверждено" not in answer
+    assert storage.published == []
+    assert session.scalar(select(func.count()).select_from(PriceHistory)) == 0
+
+
+def test_changed_market_does_not_apply_old_button(session: Session, build_worker: Any) -> None:
+    worker, storage, client, proposal = stage_test_proposal(session, build_worker)
+    client._responses = {(IPHONE, ALMATY): [competitor("rival", 350000)]}
+    with worker:
+        assert "конкурентов изменились" in worker.review_proposal(proposal.id, True, 42)
+    session.expire_all()
+    assert proposal.status == "superseded" and storage.published == []
+
+
+def test_unreachable_market_keeps_button_retryable(session: Session, build_worker: Any) -> None:
+    worker, storage, client, proposal = stage_test_proposal(session, build_worker)
+    client._responses = {(IPHONE, ALMATY): KaspiTransportError("offline")}
+    with worker:
+        assert "попробуйте" in worker.review_proposal(proposal.id, True, 42)
+    session.expire_all()
+    assert proposal.status == "pending" and storage.published == []
+
+
+def test_known_purchase_price_guards_loss_and_impossible_max_is_skipped(session: Session, build_worker: Any) -> None:
+    product = make_product(session, "COST", IPHONE, cities={ALMATY: 400000}, min_price=200000)
+    product.purchase_price = Decimal(350000)
+    session.flush()
+    worker, _, _ = build_worker(FakeKaspiClient({(IPHONE, ALMATY): [
+        competitor(MERCHANT.merchant_id, 400000), competitor("rival", 250000)]}))
+    with worker:
+        snapshots, _ = worker._load_rules(session)
+        assert snapshots[0].config.min_price == Decimal(360825)
+        worker.run_once()
+        session.expire_all()
+        assert product.rules[0].current_price == Decimal(400000)
+        product.purchase_price = Decimal(600000)
+        session.flush()
+        snapshots, _ = worker._load_rules(session)
+        assert snapshots == []
+
+
+def test_manual_edit_during_scrape_is_not_overwritten(session: Session, build_worker: Any) -> None:
+    product = make_product(session, "RACE", IPHONE, cities={ALMATY: 362000})
+    client = FakeKaspiClient({(IPHONE, ALMATY): [competitor("rival", 350000)]})
+    worker, storage, _ = build_worker(client)
+    with worker:
+        snapshots, _ = worker._load_rules(session)
+        outcome = worker._price_one(snapshots[0])
+        product.rules[0].current_price = Decimal(450000)
+        session.flush()
+        _, applied = worker._write([outcome])
+    assert applied == set() and storage.published == []
+    assert session.scalar(select(RepricerRule.current_price)) == Decimal(450000)
+
+
+def test_mode_enabled_during_scrape_blocks_automatic_write(session: Session, build_worker: Any) -> None:
+    make_product(session, "MODE", IPHONE)
+    worker, storage, _ = build_worker(FakeKaspiClient({(IPHONE, ALMATY): [competitor("rival", 350000)]}))
+    with worker:
+        snapshots, _ = worker._load_rules(session)
+        outcome = worker._price_one(snapshots[0])
+        load_settings(session).test_mode = True
+        session.flush()
+        _, applied = worker._write([outcome])
+    assert applied == set() and storage.published == []
+
+
+def test_failed_delivery_retries_then_persists_after_restart(session: Session, build_worker: Any) -> None:
+    from repricer.db import PriceProposal
+    make_product(session, "RETRY", IPHONE)
+    load_settings(session).test_mode = True
+    session.flush()
+    class DeliverySink:
+        def __init__(self) -> None:
+            self.calls = 0
+        def send(self, text: str) -> bool:
+            self.calls += 1
+            return self.calls > 1
+    sink = DeliverySink()
+    client = FakeKaspiClient({(IPHONE, ALMATY): [competitor("rival", 350000)]})
+    worker, _, _ = build_worker(client, price_updates=sink)
+    with worker:
+        worker.run_once()
+        worker.run_once()
+    restarted, _, _ = build_worker(client, price_updates=sink)
+    with restarted:
+        restarted.run_once()
+    assert sink.calls == 2
+    assert session.scalar(select(func.count()).select_from(PriceProposal)) == 1

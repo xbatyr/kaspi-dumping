@@ -18,17 +18,20 @@ bot sends: the worker is synchronous too.
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
 from collections.abc import Callable
 from typing import Protocol
+from typing import Any
 
 from curl_cffi import requests as curl_requests
 from loguru import logger
 from sqlalchemy.orm import Session
 
 from repricer.telegram.subscriptions import subscriber_chat_ids
+from repricer.db.settings_store import settings_or_none
 
 TELEGRAM_API = "https://api.telegram.org"
 
@@ -57,7 +60,7 @@ class Alert:
 
 
 class AlertSink(Protocol):
-    def send(self, text: str) -> None: ...
+    def send(self, text: str) -> bool | None: ...
 
 
 class AlertThrottle:
@@ -82,28 +85,37 @@ class TelegramSink:
     """Posts to the Bot API over plain HTTP, no event loop involved."""
 
     def __init__(self, token: str, chat_id: int, *, timeout: float = 10.0) -> None:
+        self._token = token
         self._url = f"{TELEGRAM_API}/bot{token}/sendMessage"
         self._chat_id = chat_id
         self._timeout = timeout
 
-    def send(self, text: str) -> None:
+    def send(self, text: str, *, reply_markup: dict[str, Any] | None = None) -> bool:
+        payload: dict[str, Any] = {
+            "chat_id": self._chat_id, "text": text, "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        }
+        if reply_markup is not None:
+            payload["reply_markup"] = reply_markup
         try:
             response = curl_requests.post(
                 self._url,
-                json={
-                    "chat_id": self._chat_id,
-                    "text": text,
-                    "parse_mode": "HTML",
-                    "disable_web_page_preview": True,
-                },
+                json=payload,
                 timeout=self._timeout,
             )
         except Exception as exc:  # noqa: BLE001 - a failed alert must not stop repricing
-            logger.warning("Telegram alert not delivered: {}", exc)
-            return
-        if response.status_code != 200:
-            body = json.loads(response.content or b"{}").get("description", response.status_code)
-            logger.warning("Telegram refused the alert: {}", body)
+            logger.warning("Telegram alert not delivered: {}", str(exc).replace(self._token, "***"))
+            return False
+        try:
+            body = json.loads(response.content or b"{}")
+        except ValueError:
+            logger.warning("Telegram returned non-JSON HTTP {}", response.status_code)
+            return False
+        if response.status_code != 200 or not isinstance(body, dict) or body.get("ok") is not True:
+            description = body.get("description", response.status_code) if isinstance(body, dict) else response.status_code
+            logger.warning("Telegram refused the alert: {}", str(description).replace(self._token, "***"))
+            return False
+        return True
 
 
 class BroadcastTelegramSink:
@@ -115,6 +127,7 @@ class BroadcastTelegramSink:
         self._token = token
         self._merchant_id = merchant_id
         self._session_factory = session_factory
+        self._last_proposal_sent: dict[int, float] = {}
 
     def send(self, text: str) -> None:
         try:
@@ -125,6 +138,27 @@ class BroadcastTelegramSink:
             return
         for chat_id in chat_ids:
             TelegramSink(self._token, chat_id).send(text)
+
+    def send_proposal(self, text: str, proposal_id: int, delivered: set[str]) -> list[str]:
+        with self._session_factory() as session:
+            shop = settings_or_none(session)
+            owners = {int(c) for c in (shop.telegram_chat_ids if shop else []) if c.lstrip("-").isdigit()}
+            recipients = set(subscriber_chat_ids(session, self._merchant_id)) | owners
+        keyboard = {"inline_keyboard": [[
+            {"text": "✅ Подтвердить", "callback_data": f"price:{proposal_id}:yes"},
+            {"text": "❌ Отклонить", "callback_data": f"price:{proposal_id}:no"},
+        ]]}
+        sent: list[str] = []
+        for chat_id in sorted(recipients):
+            if str(chat_id) in delivered:
+                continue
+            pause = 1.05 - (time.monotonic() - self._last_proposal_sent.get(chat_id, 0))
+            if pause > 0:
+                time.sleep(pause)
+            if TelegramSink(self._token, chat_id).send(text, reply_markup=keyboard if chat_id in owners else None):
+                sent.append(str(chat_id))
+                self._last_proposal_sent[chat_id] = time.monotonic()
+        return sent
 
 
 class LoggingSink:

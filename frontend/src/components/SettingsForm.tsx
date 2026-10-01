@@ -133,8 +133,9 @@ export function SettingsForm({ settings }: { settings: Settings }) {
           <span>
             <span className="block text-sm font-medium text-slate-900">Тестовый режим</span>
             <span className="block text-xs text-slate-500">
-              Бот считает цены как обычно, но не меняет их, а присылает в Telegram «Хочу поменять»
-              с причиной. Удобно, чтобы проверить стратегию до запуска.
+              Бот присылает желаемую цену и причину в Telegram. Владелец выбирает
+              «Подтвердить» или «Отклонить». Без подтверждения XML не меняется.
+              Если снять галочку, новые расчёты применяются автоматически.
             </span>
           </span>
         </label>

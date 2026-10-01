@@ -9,6 +9,8 @@ sends a few commands a day, and a thread per update would buy nothing.
 from __future__ import annotations
 
 import threading
+import os
+from pathlib import Path
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from html import escape
@@ -105,6 +107,7 @@ class RepricerBot:
         allowed_chat_ids: frozenset[int],
         summary_chat_id: int | None = None,
         summary_at: str = "20:00",
+        proposal_reviewer: Callable[[int, bool, int], str] | None = None,
     ) -> None:
         self._api = api
         self._session_factory = session_factory
@@ -113,6 +116,7 @@ class RepricerBot:
         self._guard = OwnerOnly(allowed_chat_ids)
         self._summary_chat_id = summary_chat_id
         self._summary_at = summary_at
+        self._proposal_reviewer = proposal_reviewer
         self._commands: dict[str, Callable[[int, str], None]] = {
             "/start": self._start,
             "/unsubscribe": self._unsubscribe,
@@ -127,6 +131,11 @@ class RepricerBot:
     # --- Updates --------------------------------------------------------------
 
     def handle(self, update: Update) -> None:
+        # Approval authorization is checked against current DB settings, not a
+        # list captured when this long-running process was started.
+        if update.chat_id is not None and update.callback_id and update.callback_data.startswith("price:"):
+            self._price_button(update, update.chat_id)
+            return
         if update.chat_id is None or not self._guard.allows(update):
             return
         if update.callback_id is not None:
@@ -260,6 +269,34 @@ class RepricerBot:
 
     # --- Buttons --------------------------------------------------------------
 
+    def _price_button(self, update: Update, chat_id: int) -> None:
+        assert update.callback_id is not None
+        try:
+            _, raw_id, choice = update.callback_data.split(":")
+            proposal_id = int(raw_id)
+            if proposal_id < 1 or choice not in {"yes", "no"}:
+                raise ValueError("invalid proposal callback")
+        except ValueError:
+            self._api.answer_callback(update.callback_id, "Некорректное предложение")
+            return
+        with self._session_factory() as session:
+            from repricer.db.settings_store import settings_or_none
+            shop = settings_or_none(session)
+            authorized = shop is not None and str(chat_id) in shop.telegram_chat_ids
+        if not authorized:
+            self._api.answer_callback(update.callback_id, "Только владелец может подтверждать цены")
+            return
+        self._api.answer_callback(update.callback_id, "Проверяем актуальную цену…")
+        if self._proposal_reviewer is None:
+            self._api.send_message(chat_id, "Подтверждение сейчас недоступно. Цена не изменена.")
+            return
+        answer = self._proposal_reviewer(proposal_id, choice == "yes", chat_id)
+        # Failed market fetches are retryable: keep the original buttons.
+        if answer.startswith("Не удалось проверить"):
+            self._api.send_message(chat_id, answer)
+        else:
+            self._replace(update, chat_id, answer)
+
     def _button(self, update: Update, chat_id: int) -> None:
         assert update.callback_id is not None
         data = update.callback_data
@@ -334,6 +371,20 @@ def run_bot(
         session_factory = sessionmaker(create_engine(settings.database_url, pool_pre_ping=True))
     limiter = RateLimiter(1.0)
     api = TelegramApi(settings.bot_token)
+    def review(proposal_id: int, approve: bool, chat_id: int) -> str:
+        from repricer.db.settings_store import load_settings
+        from repricer.service import RuntimeConfig, WorkerService
+        assert session_factory is not None
+        with session_factory() as session:
+            config = RuntimeConfig.from_settings(load_settings(session))
+        if config is None:
+            return "Магазин не настроен. Цена не изменена."
+        service = WorkerService(session_factory=session_factory,
+            feed_dir=Path(os.getenv("FEED_DIR", "/tmp/repricer-feeds")),
+            feed_base_url=os.getenv("FEED_BASE_URL"))
+        with service._build_worker(config) as worker:
+            return worker.review_proposal(proposal_id, approve, chat_id)
+
     bot = RepricerBot(
         api,
         session_factory=session_factory,
@@ -342,6 +393,7 @@ def run_bot(
         allowed_chat_ids=settings.allowed_chat_ids,
         summary_chat_id=settings.target_chat_id,
         summary_at=settings.summary_at,
+        proposal_reviewer=review,
     )
     logger.info(
         "Bot started for merchant {}, {} chat(s) allowed",

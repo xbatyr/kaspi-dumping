@@ -125,7 +125,8 @@ class TelegramApi:
     def edit_message_text(self, chat_id: int, message_id: int, text: str) -> None:
         self.call(
             "editMessageText",
-            {"chat_id": chat_id, "message_id": message_id, "text": text, "parse_mode": "HTML"},
+            {"chat_id": chat_id, "message_id": message_id, "text": text, "parse_mode": "HTML",
+             "reply_markup": {"inline_keyboard": []}},
         )
 
     def answer_callback(self, callback_id: str, text: str | None = None) -> None:

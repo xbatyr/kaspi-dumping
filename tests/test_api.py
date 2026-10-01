@@ -98,7 +98,7 @@ def rule_payload(**overrides: Any) -> dict[str, Any]:
 
 # --- GET /api/rules -----------------------------------------------------------
 
-def test_management_cost_stock_and_flags_reach_feed(session: Session, client: TestClient):
+def test_management_cost_stock_and_flags_reach_feed(session: Session, client: TestClient) -> None:
     product = make_product(session, base_price=400000, cities={ALMATY: 362000})
     store = product.availabilities[0].store_id
     response = client.patch(f"/api/products/{product.sku}/management", json={
@@ -116,7 +116,7 @@ def test_management_cost_stock_and_flags_reach_feed(session: Session, client: Te
     assert availability.attrib == {"storeId": store, "available": "no", "stockCount": "7", "preOrder": "3"}
 
 
-def test_management_rejects_unknown_stock_and_preserves_cost(session: Session, client: TestClient):
+def test_management_rejects_unknown_stock_and_preserves_cost(session: Session, client: TestClient) -> None:
     product = make_product(session, base_price=400000)
     response = client.patch(f"/api/products/{product.sku}/management", json={
         "purchase_price": "5", "availabilities": [{"store_id": "WRONG"}],
@@ -706,7 +706,7 @@ def test_feed_leaves_unfinished_products_out(session: Session, client: TestClien
     # price list down with it; the dashboard shows it as a blocker instead.
     assert response.status_code == 200
     root = ET.fromstring(response.content)
-    assert sorted(offer.get("sku") for offer in root.iter(f"{NS}offer")) == ["GOOD", "NO-BRAND"]
+    assert sorted(offer.attrib["sku"] for offer in root.iter(f"{NS}offer")) == ["GOOD", "NO-BRAND"]
 
 
 def test_feed_refuses_to_serve_an_empty_catalogue(session: Session, client: TestClient) -> None:

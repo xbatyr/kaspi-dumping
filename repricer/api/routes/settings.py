@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, status
 from loguru import logger
+from sqlalchemy import select, update
 
 from repricer.api.deps import SessionDep
 from repricer.api.schemas import SettingsIn, SettingsOut
 from repricer.api.security import ApiKeyGuard
-from repricer.db.models import ShopSettings
+from repricer.db.models import PriceProposal, ShopSettings
 from repricer.db.settings_store import load_settings
 from repricer.scraper import ProxyPool, mask_proxy
 
@@ -28,7 +29,9 @@ def update_settings(payload: SettingsIn, session: SessionDep) -> SettingsOut:
         except ValueError as exc:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
 
-    settings = load_settings(session)
+    settings = session.scalar(select(ShopSettings).with_for_update()) or load_settings(session)
+    if settings.test_mode != payload.test_mode or not payload.worker_enabled:
+        session.execute(update(PriceProposal).where(PriceProposal.status == "pending").values(status="superseded"))
     settings.merchant_id = payload.merchant_id
     settings.company = payload.company
     settings.merchant_rating = payload.merchant_rating

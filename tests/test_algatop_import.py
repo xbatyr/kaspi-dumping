@@ -1,6 +1,7 @@
 """Reading AlgaTop's product export: the columns of its cabinet, strictly."""
 
 import io
+from collections.abc import Sequence
 from decimal import Decimal
 
 import pytest
@@ -24,12 +25,12 @@ OFF_SALE = [
 ]
 
 
-def xlsx(*rows: list[object]) -> bytes:
+def xlsx(*rows: Sequence[object]) -> bytes:
     book = Workbook()
     sheet = book.active
     assert sheet is not None
     for row in rows:
-        sheet.append(row)
+        sheet.append(list(row))
     out = io.BytesIO()
     book.save(out)
     return out.getvalue()

@@ -569,6 +569,33 @@ def test_updates_are_read_from_plain_json() -> None:
     assert Update.parse({"update_id": 3, "edited_message": {}}) is None
 
 
+def test_price_buttons_use_current_owner_list(session: Session, session_factory: Any) -> None:
+    from repricer.db.settings_store import load_settings
+    shop = load_settings(session)
+    shop.telegram_chat_ids = ["77"]
+    session.flush()
+    api = FakeTelegram()
+    bot = build_bot(session_factory, api)
+    called = []
+    def review(proposal_id: int, approve: bool, chat_id: int) -> str:
+        called.append((proposal_id, approve, chat_id))
+        return "Done"
+    bot._proposal_reviewer = review
+    bot.handle(Update(chat_id=42, callback_id="unauthorized", callback_data="price:9:yes", message_id=5))
+    assert called == []
+    bot.handle(Update(chat_id=77, callback_id="owner", callback_data="price:9:yes", message_id=5))
+    assert called == [(9, True, 77)]
+    assert api.edited[-1] == (77, 5, "Done")
+
+
+@pytest.mark.parametrize("data", ["price:x:yes", "price:0:yes", "price:9:maybe", "price:9:yes:extra"])
+def test_malformed_price_buttons_do_not_write(session: Session, session_factory: Any, data: str) -> None:
+    api = FakeTelegram()
+    bot = build_bot(session_factory, api)
+    bot.handle(Update(chat_id=42, callback_id="invalid", callback_data=data, message_id=5))
+    assert api.edited == [] and api.answered
+
+
 def test_a_stranger_can_subscribe_and_nothing_more(session: Session, session_factory: Any) -> None:
     api = FakeTelegram()
     bot = build_bot(session_factory, api)
