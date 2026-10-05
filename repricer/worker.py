@@ -35,6 +35,7 @@ from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from urllib.parse import quote
 
 from loguru import logger
 from sqlalchemy import select
@@ -622,7 +623,7 @@ class RepricingWorker:
                         latest.status = "superseded"
                     text = (
                         "🧪 <b>Тестовый режим. Хочу поменять:</b>\n"
-                        + _change_line(outcome, snapshot.current_price)
+                        + _change_line(outcome, snapshot.current_price, include_product_link=True)
                         + f"\nЛимиты: {tenge(snapshot.config.min_price)} — {tenge(snapshot.config.max_price)}"
                         + ("\nЗакупка учтена: ниже безубыточности не продаём."
                            if snapshot.purchase_known else "\nЗакупка не указана: защита только по заданной мин. цене.")
@@ -852,7 +853,7 @@ class RepricingWorker:
         return client
 
 
-def _change_line(outcome: TaskOutcome, before: Decimal | None) -> str:
+def _change_line(outcome: TaskOutcome, before: Decimal | None, *, include_product_link: bool = False) -> str:
     """One price change for Telegram, with the reason it was made."""
     decision = outcome.decision
     assert decision is not None
@@ -861,7 +862,13 @@ def _change_line(outcome: TaskOutcome, before: Decimal | None) -> str:
         f"{tenge(before)} → {tenge(decision.new_price)}"
     )
     why = _why(outcome)
-    return f"{line}\n    <i>{escape(why)}</i>" if why else line
+    text = f"{line}\n    <i>{escape(why)}</i>" if why else line
+    if include_product_link:
+        card_id = quote(outcome.snapshot.kaspi_product_id, safe="")
+        city_id = quote(outcome.snapshot.city_id, safe="")
+        url = escape(f"https://kaspi.kz/shop/p/-{card_id}/?c={city_id}", quote=True)
+        text += f'\n<a href="{url}">Открыть товар на Kaspi ↗</a>'
+    return text
 
 
 def _why(outcome: TaskOutcome) -> str | None:
