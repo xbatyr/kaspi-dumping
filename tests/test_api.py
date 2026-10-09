@@ -244,6 +244,47 @@ def test_personal_limits_can_be_prepared_before_shared_strategy(session: Session
     assert product.rules[0].strategy is PricingStrategy.BEAT_FIRST
 
 
+@pytest.mark.parametrize("endpoint", ["product", "rule", "bulk"])
+def test_setting_max_below_current_changes_xml_immediately(session: Session, client: TestClient, endpoint: str) -> None:
+    product = make_product(session, "CAP", cities={ASTANA: 100000})
+    rule = product.rules[0]
+    rule.min_price = Decimal(80000)
+    session.flush()
+    if endpoint == "product":
+        response = client.put("/api/strategy/products/CAP/limits", json={"min_price": "80000", "max_price": "90000"})
+    elif endpoint == "rule":
+        response = client.put(f"/api/rules/{rule.id}", json={"strategy": "beat_first", "min_price": "80000", "max_price": "90000", "step": 1, "is_active": True})
+    else:
+        response = client.post("/api/rules/bulk-update", json={"rule_ids": [rule.id], "max_price": "90000"})
+    assert response.status_code == 200, response.text
+    session.expire_all()
+    assert rule.current_price == rule.pending_price == Decimal(90000)
+    assert rule.price_requested_at is not None
+    feed = ET.fromstring(client.get("/feed/kaspi.xml").content)
+    price = next(n for n in feed.iter(f"{NS}cityprice") if n.get("cityId") == ASTANA)
+    assert price.text == "90000"
+
+
+@pytest.mark.parametrize("endpoint", ["product", "rule", "bulk"])
+def test_immediate_cap_cannot_sell_below_known_cost(session: Session, client: TestClient, endpoint: str) -> None:
+    product = make_product(session, "CAP", cities={ASTANA: 100000})
+    product.purchase_price = Decimal(95000)
+    rule = product.rules[0]
+    rule.min_price = Decimal(80000)
+    session.flush()
+    if endpoint == "product":
+        response = client.put("/api/strategy/products/CAP/limits", json={"min_price": "80000", "max_price": "90000"})
+    elif endpoint == "rule":
+        response = client.put(f"/api/rules/{rule.id}", json={"strategy": "beat_first", "min_price": "80000", "max_price": "90000", "step": 1, "is_active": True})
+    else:
+        response = client.post("/api/rules/bulk-update", json={"rule_ids": [rule.id], "max_price": "90000"})
+    assert response.status_code == 422
+    assert "безубыточной" in response.json()["detail"]
+    session.expire_all()
+    assert rule.current_price == Decimal(100000)
+    assert rule.pending_price is None
+
+
 def test_shared_strategy_rejects_manual_and_duplicate_cities(client: TestClient) -> None:
     assert client.put("/api/strategy", json={
         "strategy": "manual", "city_ids": [ASTANA],

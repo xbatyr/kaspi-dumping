@@ -361,7 +361,7 @@ def _raise_to_max(product: Product) -> bool:
         # Kaspi takes whole tenge, and a ceiling may have been typed with tiyn.
         ceiling = rule.max_price.quantize(_ONE, rounding=ROUND_FLOOR)
         if rule.current_price is None or rule.current_price < ceiling:
-            rule.current_price = ceiling
+            rule.request_price(ceiling)
             raised = True
     return raised
 

@@ -269,6 +269,9 @@ class RuleOut(BaseModel):
     current_price: MoneyOut | None
     last_evaluated_at: datetime | None
     market_snapshot: dict[str, str | int | None] | None = None
+    pending_price: MoneyOut | None = None
+    price_requested_at: datetime | None = None
+    price_confirmed_at: datetime | None = None
     #: Null while the price has never moved, which is also true right after the
     #: rule is created.
     last_change: RuleStatusOut | None = None

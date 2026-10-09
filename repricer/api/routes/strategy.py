@@ -21,6 +21,7 @@ from repricer.pricing import (
     PricingStrategy,
     limits_from_percent,
 )
+from repricer.pricing.margin import break_even_price
 
 router = APIRouter(prefix="/api/strategy", tags=["strategy"], dependencies=[ApiKeyGuard])
 
@@ -68,6 +69,7 @@ def _apply(
     ``previous_cities`` are the cities the strategy covered before this change.
     """
     assert settings.global_strategy is not None
+    validate_price_cap(product, settings, maximum)
     competing = set(settings.global_city_ids if previous_cities is None else previous_cities)
     # Before the first shared strategy every rule counts: a product switched off
     # then is still switched off.
@@ -89,6 +91,7 @@ def _apply(
         rule.ignored_merchants = list(settings.global_ignored_merchants)
         rule.min_price = minimum
         rule.max_price = maximum
+        rule.cap_current_price()
         _remember_percent(rule, percent)
     for rule in product.rules:
         if rule.city_id not in settings.global_city_ids:
@@ -122,6 +125,7 @@ def set_product_limits(
     covers; without one the product keeps a single manual rule, so that limits
     can be prepared before the bot is ever switched on.
     """
+    validate_price_cap(product, settings, limits.max_price)
     if settings.global_strategy is None or not settings.global_city_ids:
         if not product.rules:
             rule = RepricerRule(
@@ -134,14 +138,28 @@ def set_product_limits(
             )
             _remember_percent(rule, percent)
             product.rules.append(rule)
+            rule.cap_current_price()
         else:
             for rule in product.rules:
                 rule.min_price = limits.min_price
                 rule.max_price = limits.max_price
+                rule.cap_current_price()
                 rule.step = step
                 _remember_percent(rule, percent)
     else:
         _apply(product, settings, limits.min_price, limits.max_price, step, percent)
+
+
+def validate_price_cap(product: Product, settings: ShopSettings, maximum: Decimal) -> None:
+    """An immediate cap must keep the existing protection against selling at a loss."""
+    prices = [rule.current_price for rule in product.rules] or [product.base_price]
+    if not any(price is not None and price > maximum for price in prices):
+        return
+    inputs = settings.margin_inputs(maximum, product)
+    floor = break_even_price(inputs)
+    if inputs.commission_percent + inputs.tax_percent >= 100 or (floor is not None and maximum < floor):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"{product.sku}: максимум ниже безубыточной цены; проверьте закупку, расходы и лимиты")
 
 
 @router.get("", summary="Shared strategy for all configured products")

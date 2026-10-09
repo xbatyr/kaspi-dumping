@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-from decimal import Decimal
+from datetime import UTC, datetime
+from decimal import ROUND_FLOOR, Decimal
 from enum import StrEnum
 from typing import Any
 
@@ -404,6 +404,10 @@ class RepricerRule(TimestampMixin, Base):
     current_price: Mapped[Decimal | None]
     last_evaluated_at: Mapped[datetime | None]
     market_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    #: XML target not yet observed on Kaspi. Survives worker restarts.
+    pending_price: Mapped[Decimal | None]
+    price_requested_at: Mapped[datetime | None]
+    price_confirmed_at: Mapped[datetime | None]
 
     product: Mapped[Product] = relationship(back_populates="rules")
 
@@ -438,6 +442,23 @@ class RepricerRule(TimestampMixin, Base):
         if max_price is not None and max_price != self.max_price:
             self.max_price = max_price
             self.max_percent = None
+        self.cap_current_price()
+
+    def request_price(self, price: Decimal) -> None:
+        """Write one XML target and wait for Kaspi; same target is idempotent."""
+        if self.current_price == price:
+            return
+        self.current_price = price
+        self.pending_price = price
+        self.price_requested_at = datetime.now(UTC)
+        self.price_confirmed_at = None
+
+    def cap_current_price(self) -> bool:
+        ceiling = self.max_price.quantize(Decimal(1), rounding=ROUND_FLOOR)
+        if self.current_price is not None and self.current_price > ceiling:
+            self.request_price(ceiling)
+            return True
+        return False
 
     def refresh_limits(self, base_price: Decimal | None) -> bool:
         """Recompute the tenge limits from the percentages; True if they moved."""
@@ -448,6 +469,7 @@ class RepricerRule(TimestampMixin, Base):
             return False
         self.min_price = updated.min_price
         self.max_price = updated.max_price
+        self.cap_current_price()
         return True
 
     def to_pricing_config(

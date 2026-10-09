@@ -39,7 +39,7 @@ from repricer.api.schemas import (
     RuleUpdate,
     SaleCountsOut,
 )
-from repricer.db.models import PriceHistory, Product, RepricerRule
+from repricer.db.models import PriceHistory, Product, RepricerRule, ShopSettings
 from repricer.db.queries import latest_changes
 from repricer.db.settings_store import load_settings, settings_or_none
 from repricer.pricing import PricingStrategy
@@ -266,6 +266,9 @@ def update_rule(
     rule_id: int, payload: RuleUpdate, session: SessionDep, merchant: MerchantDep
 ) -> RuleOut:
     rule = _rule_by_id(session, merchant, rule_id)
+    from repricer.api.routes.strategy import validate_price_cap
+
+    validate_price_cap(rule.product, load_settings(session), payload.max_price)
     _require_card(rule.product, payload.strategy)
     if payload.strategy is PricingStrategy.FIXED_PRICE and rule.product.base_price is None:
         raise HTTPException(
@@ -325,11 +328,14 @@ def bulk_update(
 
     # Validate every rule before changing any of them, so a mixed selection
     # cannot leave only part of the catalogue with new limits.
+    from repricer.api.routes.strategy import validate_price_cap
+
     for rule in rules:
         strategy = payload.strategy or rule.strategy
         _require_card(rule.product, strategy)
         minimum = payload.min_price if payload.min_price is not None else rule.min_price
         maximum = payload.max_price if payload.max_price is not None else rule.max_price
+        validate_price_cap(rule.product, global_settings or ShopSettings(), maximum)
         position = (
             payload.target_position
             if payload.target_position is not None

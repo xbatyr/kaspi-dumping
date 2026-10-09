@@ -139,6 +139,19 @@ def build_worker(session_factory: Callable[[], Session]) -> Any:
         price_updates: Any = None,
         **settings: Any,
     ) -> tuple[RepricingWorker, FakeStorage, FakeKaspiClient]:
+        # These pricing fixtures model products that are listed on Kaspi. Old
+        # abbreviated rival-only pages must include their own listing too.
+        # Tests for actual withdrawal explicitly set include_own_listing=False.
+        if settings.pop("include_own_listing", True):
+            pages = dict(client._responses)
+            with session_factory() as db:
+                for rule, product in db.execute(select(RepricerRule, Product).join(
+                    Product, Product.id == RepricerRule.product_id)):
+                    key = (product.kaspi_product_id, rule.city_id)
+                    page = pages.get(key)
+                    if isinstance(page, list) and page and not any(o.merchant_id == MERCHANT.merchant_id for o in page):
+                        pages[key] = [*page, competitor(MERCHANT.merchant_id, int(rule.current_price or product.base_price or rule.max_price))]
+            client._responses = pages
         feed_storage = storage or FakeStorage()
         worker = RepricingWorker(
             settings=WorkerSettings(merchant=MERCHANT, concurrency=settings.pop("concurrency", 2), **settings),
@@ -290,7 +303,7 @@ def test_prices_from_what_kaspi_shows_and_then_holds_still(
         ([], 500000),
         # A rival is still there: the bot lowers from the raised price, not
         # from the old one Kaspi still shows.
-        ([competitor("rival", 450000)], 449999),
+        ([competitor("rival", 450000)], 500000),
     ],
 )
 def test_a_price_raised_by_hand_is_not_undone_before_kaspi_fetches_it(
@@ -837,6 +850,148 @@ def test_the_price_is_never_cut_under_a_store_that_ships_from_another_city(
     assert product.rules[0].current_price == Decimal(expected)
 
 
+@pytest.mark.parametrize(("stock", "available", "active"), [(0, True, True), (5, False, True), (5, True, False)])
+def test_withdrawn_products_are_not_even_scraped(session: Session, build_worker: Any, stock: int, available: bool, active: bool) -> None:
+    product = make_product(session, "WITHDRAWN", IPHONE, active=active)
+    product.availabilities[0].stock_count = stock
+    product.availabilities[0].available = available
+    session.flush()
+    worker, storage, client = build_worker(FakeKaspiClient({(IPHONE, ALMATY): [competitor("rival", 340000)]}))
+    with worker:
+        worker.run_once()
+    assert client.calls == [] and storage.published == []
+
+
+def test_missing_own_listing_is_never_repriced(session: Session, build_worker: Any) -> None:
+    product = make_product(session, "WITHDRAWN_ON_KASPI", IPHONE)
+    worker, storage, _ = build_worker(FakeKaspiClient({(IPHONE, ALMATY): [competitor("rival", 340000)]}), include_own_listing=False)
+    with worker:
+        report = worker.run_once()
+    session.expire_all()
+    assert report.skipped == 1 and storage.published == []
+    assert product.rules[0].current_price == Decimal(362000)
+    assert product.rules[0].market_snapshot is not None
+    assert product.rules[0].market_snapshot["observed_price"] is None
+
+
+@pytest.mark.parametrize(("rival_price", "current", "maximum", "expected"), [
+    (100000, 110000, 160000, 120000), (85000, 110000, 160000, 110000),
+    (90000, 100000, 160000, 108000), (100000, 110000, 115000, 115000),
+    (100000, 125000, 160000, 125000), (85000, 110000, 105000, 105000),
+])
+def test_astana_foreign_city_premium_examples(session: Session, build_worker: Any, rival_price: int, current: int, maximum: int, expected: int) -> None:
+    product = make_product(session, "PREMIUM", IPHONE, cities={ASTANA: current}, min_price=90000, max_price=maximum)
+    product.auto_increase = True
+    session.flush()
+    ours = replace(competitor(MERCHANT.merchant_id, current), intercity=False)
+    far = replace(competitor("far", rival_price), intercity=True)
+    worker, _, _ = build_worker(FakeKaspiClient({(IPHONE, ASTANA): [far, ours]}))
+    with worker:
+        worker.run_once()
+    session.expire_all()
+    assert product.rules[0].current_price == Decimal(expected)
+
+
+def test_astana_local_rival_keeps_normal_dumping(session: Session, build_worker: Any) -> None:
+    product = make_product(session, "LOCAL", IPHONE, cities={ASTANA: 110000}, min_price=90000, max_price=160000)
+    product.auto_increase = True
+    session.flush()
+    offers = [replace(competitor(MERCHANT.merchant_id, 110000), intercity=False),
+              replace(competitor("local", 105000), intercity=False),
+              replace(competitor("far", 100000), intercity=True)]
+    worker, _, _ = build_worker(FakeKaspiClient({(IPHONE, ASTANA): offers}))
+    with worker:
+        worker.run_once()
+    session.expire_all()
+    assert product.rules[0].current_price == Decimal(104999)
+
+
+def test_foreign_premium_is_only_written_after_test_mode_confirmation(session: Session, build_worker: Any) -> None:
+    from repricer.db import PriceProposal
+
+    product = make_product(session, "PREMIUM", IPHONE, cities={ASTANA: 110000}, min_price=90000, max_price=160000)
+    product.auto_increase = True
+    shop = load_settings(session)
+    shop.test_mode = shop.worker_enabled = True
+    shop.telegram_chat_ids = ["42"]
+    session.flush()
+    offers = [replace(competitor(MERCHANT.merchant_id, 110000), intercity=False),
+              replace(competitor("far", 100000), intercity=True)]
+    sink = FakeSink()
+    worker, storage, _ = build_worker(FakeKaspiClient({(IPHONE, ASTANA): offers}), price_updates=sink)
+    with worker:
+        worker.run_once()
+        session.expire_all()
+        proposal = session.scalar(select(PriceProposal))
+        assert proposal is not None and proposal.proposed_price == Decimal(120000)
+        assert "+20%" in proposal.message and "Shop far" in proposal.message
+        assert "kaspi.kz/shop/p/" in proposal.message
+        assert product.rules[0].current_price == Decimal(110000) and storage.published == []
+        assert "Подтверждено" in worker.review_proposal(proposal.id, True, 42)
+        assert worker.run_once().changed == 0  # Kaspi still shows the old price.
+    session.expire_all()
+    assert product.rules[0].current_price == product.rules[0].pending_price == Decimal(120000)
+    assert len(storage.published) == 1
+
+
+def test_pending_xml_waits_through_competitor_changes_and_restart(session: Session, build_worker: Any) -> None:
+    product = make_product(session, "DELAY", IPHONE, cities={ALMATY: 100000}, min_price=80000, max_price=130000)
+    ours = competitor(MERCHANT.merchant_id, 100000)
+    client = FakeKaspiClient({(IPHONE, ALMATY): [ours, competitor("rival", 99999)]})
+    worker, storage, _ = build_worker(client)
+    with worker:
+        worker.run_once()
+    session.expire_all()
+    rule = product.rules[0]
+    assert rule.current_price == rule.pending_price == Decimal(99998)
+    requested_at = rule.price_requested_at
+    client._responses = {(IPHONE, ALMATY): [ours, competitor("rival", 99997)]}
+    restarted, _, _ = build_worker(client, storage=storage)
+    with restarted:
+        for _ in range(3):
+            assert restarted.run_once().changed == 0
+        session.expire_all()
+        assert rule.price_requested_at == requested_at
+        assert len(storage.published) == 1
+        # Only a real observed acknowledgement unlocks another target.
+        client._responses = {(IPHONE, ALMATY): [competitor(MERCHANT.merchant_id, 99998), competitor("rival", 99997)]}
+        assert restarted.run_once().changed == 1
+    session.expire_all()
+    assert rule.current_price == rule.pending_price == Decimal(99996)
+    assert len(storage.published) == 2
+
+
+def test_existing_xml_target_still_waits_for_kaspi_ack(session: Session, build_worker: Any) -> None:
+    product = make_product(session, "IMPORTED", IPHONE, cities={ALMATY: 99998}, min_price=80000, max_price=130000)
+    ours = competitor(MERCHANT.merchant_id, 100000)
+    client = FakeKaspiClient({(IPHONE, ALMATY): [ours, competitor("rival", 99999)]})
+    worker, storage, _ = build_worker(client)
+    with worker:
+        assert worker.run_once().changed == 0
+        session.expire_all()
+        assert product.rules[0].pending_price == Decimal(99998)
+        published = len(storage.published)
+        client._responses = {(IPHONE, ALMATY): [ours, competitor("rival", 99997)]}
+        assert worker.run_once().changed == 0
+        assert len(storage.published) == published
+    session.expire_all()
+    assert product.rules[0].current_price == Decimal(99998)
+    assert session.scalar(select(func.count()).select_from(PriceHistory)) == 0
+
+
+def test_kaspi_ack_clears_pending_without_republishing(session: Session, build_worker: Any) -> None:
+    product = make_product(session, "ACK", IPHONE, cities={ALMATY: 100000}, min_price=80000, max_price=130000)
+    product.rules[0].request_price(Decimal(99998))
+    session.flush()
+    worker, storage, _ = build_worker(FakeKaspiClient({(IPHONE, ALMATY): [competitor(MERCHANT.merchant_id, 99998), competitor("rival", 99999)]}))
+    with worker:
+        worker.run_once()
+    session.expire_all()
+    assert product.rules[0].pending_price is None
+    assert product.rules[0].price_confirmed_at is not None
+    assert storage.published == []
+
+
 def test_our_delivery_unknown_still_counts_as_local(session: Session, build_worker: Any) -> None:
     product = make_product(session, "PC", IPHONE, cities={ALMATY: 462900},
                            min_price=400000, max_price=520000)
@@ -1014,7 +1169,7 @@ def test_rejection_survives_worker_restart(session: Session, build_worker: Any) 
     assert session.scalar(select(func.count()).select_from(PriceProposal)) == 1
 
 
-@pytest.mark.parametrize("change", ["price", "min", "pause", "product_pause", "test_off", "bot_off", "expired", "owner_removed"])
+@pytest.mark.parametrize("change", ["price", "min", "pause", "product_pause", "zero_stock", "unavailable", "test_off", "bot_off", "expired", "owner_removed"])
 def test_stale_or_unauthorized_proposal_never_changes_price(
     session: Session, build_worker: Any, change: str
 ) -> None:
@@ -1031,6 +1186,10 @@ def test_stale_or_unauthorized_proposal_never_changes_price(
         rule.is_active = False
     elif change == "product_pause":
         rule.product.is_active = False
+    elif change == "zero_stock":
+        rule.product.availabilities[0].stock_count = 0
+    elif change == "unavailable":
+        rule.product.availabilities[0].available = False
     elif change == "test_off":
         shop.test_mode = False
     elif change == "bot_off":
@@ -1049,7 +1208,7 @@ def test_stale_or_unauthorized_proposal_never_changes_price(
 
 def test_changed_market_does_not_apply_old_button(session: Session, build_worker: Any) -> None:
     worker, storage, client, proposal = stage_test_proposal(session, build_worker)
-    client._responses = {(IPHONE, ALMATY): [competitor("rival", 350000)]}
+    client._responses = {(IPHONE, ALMATY): [competitor("rival", 350000), competitor(MERCHANT.merchant_id, 362000)]}
     with worker:
         assert "конкурентов изменились" in worker.review_proposal(proposal.id, True, 42)
     session.expire_all()

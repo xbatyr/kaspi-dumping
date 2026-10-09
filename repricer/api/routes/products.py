@@ -303,7 +303,7 @@ def import_algatop(
                 not_found.append(f"{row.sku} / {row.city_id}")
                 continue
             before = rule.current_price
-            rule.current_price = row.price
+            rule.request_price(row.price)
             touched.add(row.sku)
             if before != row.price:
                 prices_changed += 1
@@ -444,7 +444,7 @@ def _apply_algatop_row(
         rule.max_percent = None
     if row.step is not None:
         rule.step = row.step
-    rule.current_price = row.price
+    rule.request_price(row.price)
     # Limits AlgaTop left empty and other cities set as a percentage follow the
     # new own price.
     product.refresh_percent_limits()
@@ -502,7 +502,7 @@ def _apply_xml_offer(product: Product, offer: ImportedOffer) -> None:
         elif rule.strategy is PricingStrategy.MANUAL:
             rule.min_price = price
             rule.max_price = price
-            rule.current_price = price
+            rule.request_price(price)
 
 
 def _apply(product: Product, payload: ProductIn, *, is_new: bool) -> None:

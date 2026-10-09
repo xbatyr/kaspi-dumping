@@ -41,7 +41,7 @@ from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from repricer.db.models import PriceProposal, Product, RepricerRule, ShopSettings
+from repricer.db.models import PriceProposal, Product, ProductAvailability, RepricerRule, ShopSettings
 from repricer.pricing.margin import break_even_price
 from repricer.db.queries import latest_changes
 from repricer.db.settings_store import settings_or_none
@@ -102,6 +102,7 @@ class RuleSnapshot:
     #: price to work from until Kaspi fetches the feed.
     price_set_by_hand: bool = False
     purchase_known: bool = False
+    pending_price: Decimal | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,6 +118,7 @@ class TaskOutcome:
     #: Shop name of the store the price was set against, for notifications.
     reference_name: str | None = None
     market_snapshot: dict[str, str | int | None] | None = None
+    pricing_note: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -232,13 +234,16 @@ class RepricingWorker:
         elif test_mode:
             # The market is still recorded, so the catalogue shows where each
             # product stands; prices, history and the feed stay as they are.
-            self._write_market(decided)
+            self._write_market(outcomes)
             changed = self._announce_intended_changes(decided)
         elif decided:
             feed_url, applied_ids = self._write(decided)
             changed = len(applied_ids)
             self._notify(outcomes)
             self._notify_price_changes(outcomes, applied_ids)
+            self._write_market(outcomes)
+        elif not self._settings.dry_run:
+            self._write_market(outcomes)
 
         report = CycleReport(
             evaluated=len(decided),
@@ -301,6 +306,8 @@ class RepricingWorker:
             .where(
                 Product.merchant_id == self._settings.merchant.merchant_id,
                 Product.is_active,
+                Product.availabilities.any(ProductAvailability.available & (
+                    ProductAvailability.stock_count.is_(None) | (ProductAvailability.stock_count > 0))),
                 RepricerRule.is_active,
             )
             .order_by(RepricerRule.city_id, Product.sku)
@@ -394,6 +401,7 @@ class RepricingWorker:
                     last_position=change.expected_position if change else None,
                     ignore_intercity=shop.ignore_intercity_rivals,
                     purchase_known=product.purchase_price is not None,
+                    pending_price=rule.pending_price,
                     # The bot writes history with every price it sets, so a feed
                     # price that differs from its last one came from elsewhere.
                     price_set_by_hand=(
@@ -439,12 +447,23 @@ class RepricingWorker:
                 return TaskOutcome(snapshot, skipped="Kaspi returned no offers")
             own_merchant_id = snapshot.config.own_merchant_id
             own_offer = next((offer for offer in offers if offer.merchant_id == own_merchant_id), None)
+            ranked = sorted({offer.merchant_id: offer for offer in reversed(offers)}.values(),
+                            key=lambda offer: (offer.price, -(offer.rating or 0)))
+            own_index = next((index for index, offer in enumerate(ranked)
+                              if offer.merchant_id == own_merchant_id), None)
+            market: dict[str, str | int | None] = {
+                "position": own_index + 1 if own_index is not None else None,
+                "offer_count": len(ranked),
+                "observed_price": str(own_offer.price) if own_offer else None,
+                "leader_price": str(ranked[0].price),
+                "leader_merchant_id": ranked[0].merchant_id,
+                "leader_name": ranked[0].merchant_name or ranked[0].merchant_id,
+                "expected_position": None,
+            }
             if own_offer is None:
-                logger.warning(
-                    "sku={} city={}: our own offer is not on the card; pricing against competitors only",
-                    snapshot.sku,
-                    snapshot.city_id,
-                )
+                return TaskOutcome(snapshot, skipped="our listing is not on sale in this city", market_snapshot=market)
+            if snapshot.pending_price is not None and own_offer.price != snapshot.pending_price:
+                return TaskOutcome(snapshot, skipped="waiting for Kaspi to apply the XML price", market_snapshot=market)
             rivals = offers
             if snapshot.ignore_intercity and (own_offer is None or own_offer.intercity is not True):
                 # Unless we ship from another city ourselves, a store that does
@@ -468,13 +487,35 @@ class RepricingWorker:
                 else snapshot.current_price
             )
             decision = self._engine.evaluate(snapshot.config, competitors, current_price=current)
+            note = None
+            # This business sells from Astana. Foreign-city sellers establish
+            # a premium reference only when no eligible local rivals remain.
+            local = [o for o in rivals if o.merchant_id != own_merchant_id
+                     and o.merchant_id not in snapshot.config.ignored_merchants]
+            far = sorted([o for o in offers if o.intercity is True
+                          and o.merchant_id != own_merchant_id
+                          and o.merchant_id not in snapshot.config.ignored_merchants], key=lambda o: o.price)
+            if (snapshot.city_id == "710000000" and snapshot.ignore_intercity
+                    and own_offer.intercity is not True and not local and far):
+                top = far[0]
+                far_reference = CompetitorOffer(top.merchant_id, top.price, top.rating)
+                held = min(max(current or snapshot.config.floor_price, snapshot.config.floor_price), snapshot.config.ceiling_price)
+                if top.price < snapshot.config.floor_price:
+                    price = held
+                    note = "межгород дешевле нашей минимальной цены — свою цену сохраняем"
+                else:
+                    target = (top.price * Decimal("1.20")).quantize(Decimal(1), rounding="ROUND_FLOOR")
+                    price = max(held, min(target, snapshot.config.ceiling_price)) if snapshot.config.auto_increase else held
+                    note = "местных конкурентов нет: цена первого магазина межгорода +20%"
+                    if not snapshot.config.auto_increase:
+                        note += "; автоповышение выключено или действует задержка"
+                decision = replace(decision, new_price=price, reference_offer=far_reference,
+                    competitors=(far_reference,), expected_position=1, reason=DecisionReason.NO_COMPETITORS)
             leader = decision.leader
             names = {offer.merchant_id: offer.merchant_name for offer in offers}
-            ranked = sorted({offer.merchant_id: offer for offer in reversed(offers)}.values(),
-                            key=lambda offer: (offer.price, -(offer.rating or 0)))
-            own_index = next((index for index, offer in enumerate(ranked)
-                              if offer.merchant_id == own_merchant_id), None)
             reference = decision.reference_offer
+            market["expected_position"] = decision.expected_position
+            market["pricing_note"] = note
             return TaskOutcome(
                 snapshot,
                 decision=decision,
@@ -482,15 +523,8 @@ class RepricingWorker:
                 reference_name=(
                     names.get(reference.merchant_id) or reference.merchant_id if reference else None
                 ),
-                market_snapshot={
-                    "position": own_index + 1 if own_index is not None else None,
-                    "offer_count": len(ranked),
-                    "observed_price": str(ranked[own_index].price) if own_index is not None else None,
-                    "leader_price": str(ranked[0].price),
-                    "leader_merchant_id": ranked[0].merchant_id,
-                    "leader_name": ranked[0].merchant_name or ranked[0].merchant_id,
-                    "expected_position": decision.expected_position,
-                },
+                market_snapshot=market,
+                pricing_note=note,
             )
         except KaspiTransportError as exc:
             return TaskOutcome(snapshot, skipped=f"Kaspi unreachable ({exc})", unreachable=True)
@@ -582,12 +616,26 @@ class RepricingWorker:
 
     def _write_market(self, decided: Sequence[TaskOutcome]) -> None:
         """What Kaspi shows and when it was checked; never a price."""
-        snapshots = {outcome.snapshot.rule_id: outcome.market_snapshot for outcome in decided}
+        snapshots = {outcome.snapshot.rule_id: outcome.market_snapshot for outcome in decided if outcome.market_snapshot is not None}
+        targets = {outcome.snapshot.rule_id: outcome.decision.new_price for outcome in decided if outcome.decision is not None}
         with self._session_factory() as session:
             evaluated_at = datetime.now(UTC)
-            for rule in session.scalars(select(RepricerRule).where(RepricerRule.id.in_(snapshots))):
+            for rule in session.scalars(select(RepricerRule).where(
+                    RepricerRule.id.in_(snapshots)).order_by(RepricerRule.id).with_for_update()):
                 rule.market_snapshot = snapshots.get(rule.id)
                 rule.last_evaluated_at = evaluated_at
+                observed = (rule.market_snapshot or {}).get("observed_price")
+                if rule.pending_price is not None and observed is not None and Decimal(str(observed)) == rule.pending_price:
+                    rule.pending_price = None
+                    rule.price_confirmed_at = evaluated_at
+                elif (rule.pending_price is None and observed is not None
+                      and rule.current_price is not None and Decimal(str(observed)) != rule.current_price
+                      and targets.get(rule.id) == rule.current_price):
+                    # An imported XML target may already be correct without a
+                    # PriceUpdate delta; it still needs an observed acknowledgement.
+                    rule.pending_price = rule.current_price
+                    rule.price_requested_at = rule.updated_at
+                    rule.price_confirmed_at = None
             session.commit()
 
     def _announce_intended_changes(self, decided: Sequence[TaskOutcome]) -> int:
@@ -875,6 +923,10 @@ def _why(outcome: TaskOutcome) -> str | None:
     """Why the engine chose this price, in the owner's words."""
     decision = outcome.decision
     assert decision is not None
+    if outcome.pricing_note:
+        note_reference = decision.reference_offer
+        note_who = f": {outcome.reference_name} ({tenge(note_reference.price)})" if note_reference else ""
+        return outcome.pricing_note + note_who
     reference = decision.reference_offer
     who = f"{outcome.reference_name} ({tenge(reference.price)})" if reference else None
     match decision.reason:
@@ -907,7 +959,7 @@ def _fingerprint(snapshot: RuleSnapshot) -> str:
     values.update(rule_id=snapshot.rule_id, sku=snapshot.sku, card=snapshot.kaspi_product_id,
                   city=snapshot.city_id, price=snapshot.current_price, intercity=snapshot.ignore_intercity,
                   purchase_known=snapshot.purchase_known)
-    values["pricing_policy"] = "door-delivery-v2"
+    values["pricing_policy"] = "active-sale-intercity-premium-v3"
     raw = json.dumps(values, sort_keys=True, default=str)
     return hashlib.sha256(raw.encode()).hexdigest()
 

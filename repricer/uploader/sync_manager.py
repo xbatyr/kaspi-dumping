@@ -235,7 +235,7 @@ class SyncManager:
             )
             history.old_price = current_price
             session.add(history)
-            rule.current_price = decision.new_price
+            rule.request_price(decision.new_price)
             applied += 1
         return applied, skipped
 

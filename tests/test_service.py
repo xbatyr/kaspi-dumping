@@ -346,6 +346,7 @@ def test_a_real_cycle_prices_a_product(
         def get_product_offers(self, product_id: str, city_id: str) -> list[Offer]:
             return [
                 Offer("rival", "Конкурент", Decimal(390000), 4.5, 10, True, "TOMORROW"),
+                Offer("11271005", "ТОО Техно", Decimal(400000), 4.5, 10, True, "TOMORROW"),
             ]
 
         def close(self) -> None:
