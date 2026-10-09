@@ -103,6 +103,7 @@ class RuleSnapshot:
     price_set_by_hand: bool = False
     purchase_known: bool = False
     pending_price: Decimal | None = None
+    configured_min_price: Decimal | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -402,6 +403,7 @@ class RepricingWorker:
                     ignore_intercity=shop.ignore_intercity_rivals,
                     purchase_known=product.purchase_price is not None,
                     pending_price=rule.pending_price,
+                    configured_min_price=rule.min_price,
                     # The bot writes history with every price it sets, so a feed
                     # price that differs from its last one came from elsewhere.
                     price_set_by_hand=(
@@ -500,7 +502,7 @@ class RepricingWorker:
                 top = far[0]
                 far_reference = CompetitorOffer(top.merchant_id, top.price, top.rating)
                 held = min(max(current or snapshot.config.floor_price, snapshot.config.floor_price), snapshot.config.ceiling_price)
-                if top.price < snapshot.config.floor_price:
+                if top.price < (snapshot.configured_min_price or snapshot.config.floor_price):
                     price = held
                     note = "межгород дешевле нашей минимальной цены — свою цену сохраняем"
                 else:
@@ -960,6 +962,8 @@ def _fingerprint(snapshot: RuleSnapshot) -> str:
                   city=snapshot.city_id, price=snapshot.current_price, intercity=snapshot.ignore_intercity,
                   purchase_known=snapshot.purchase_known)
     values["pricing_policy"] = "active-sale-intercity-premium-v3"
+    if snapshot.configured_min_price is not None and snapshot.configured_min_price != snapshot.config.min_price:
+        values["configured_min_price"] = snapshot.configured_min_price
     raw = json.dumps(values, sort_keys=True, default=str)
     return hashlib.sha256(raw.encode()).hexdigest()
 

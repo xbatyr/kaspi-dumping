@@ -892,6 +892,50 @@ def test_astana_foreign_city_premium_examples(session: Session, build_worker: An
     assert product.rules[0].current_price == Decimal(expected)
 
 
+def test_foreign_premium_uses_the_owners_min_without_replacing_the_safe_price_floor(session: Session, build_worker: Any) -> None:
+    product = make_product(session, "COST-PREMIUM", IPHONE, cities={ASTANA: 100000}, min_price=90000, max_price=150000)
+    product.purchase_price = Decimal(93000)
+    product.auto_increase = True
+    session.flush()
+    offers = [replace(competitor(MERCHANT.merchant_id, 100000), intercity=False),
+              replace(competitor("far", 92000), intercity=True)]
+    worker, _, _ = build_worker(FakeKaspiClient({(IPHONE, ASTANA): offers}))
+    with worker:
+        snapshots, _ = worker._load_rules(session)
+        assert snapshots[0].config.floor_price == Decimal(95877)
+        assert snapshots[0].configured_min_price == Decimal(90000)
+        worker.run_once()
+    session.expire_all()
+    assert product.rules[0].current_price == Decimal(110400)
+
+
+def test_changing_foreign_threshold_invalidates_an_old_approval_even_if_break_even_is_unchanged(session: Session, build_worker: Any) -> None:
+    from repricer.db import PriceProposal
+
+    product = make_product(session, "COST-PREMIUM", IPHONE, cities={ASTANA: 100000}, min_price=90000, max_price=150000)
+    product.purchase_price = Decimal(93000)
+    product.auto_increase = True
+    shop = load_settings(session)
+    shop.test_mode = shop.worker_enabled = True
+    shop.telegram_chat_ids = ["42"]
+    session.flush()
+    offers = [replace(competitor(MERCHANT.merchant_id, 100000), intercity=False),
+              replace(competitor("far", 92000), intercity=True)]
+    worker, storage, _ = build_worker(FakeKaspiClient({(IPHONE, ASTANA): offers}), price_updates=FakeSink())
+    with worker:
+        worker.run_once()
+        session.expire_all()
+        proposal = session.scalar(select(PriceProposal))
+        assert proposal is not None and proposal.proposed_price == Decimal(110400)
+        product.rules[0].min_price = Decimal(93000)
+        session.flush()
+        snapshots, _ = worker._load_rules(session)
+        assert snapshots[0].config.floor_price == Decimal(95877)
+        assert "Настройки" in worker.review_proposal(proposal.id, True, 42)
+    assert storage.published == []
+    assert session.scalar(select(func.count()).select_from(PriceHistory)) == 0
+
+
 def test_astana_local_rival_keeps_normal_dumping(session: Session, build_worker: Any) -> None:
     product = make_product(session, "LOCAL", IPHONE, cities={ASTANA: 110000}, min_price=90000, max_price=160000)
     product.auto_increase = True
