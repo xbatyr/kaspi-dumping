@@ -108,10 +108,20 @@ def break_even_price(inputs: MarginInputs) -> Decimal | None:
     if variable_share <= 0:
         # Commission and tax alone take the whole price: no price works.
         return None
-    fixed = (inputs.purchase_price or Decimal(0)) + inputs.delivery_cost
+    fixed = _money(inputs.purchase_price or Decimal(0)) + _money(inputs.delivery_cost)
     if fixed <= 0:
         return None
-    return (fixed / variable_share).quantize(_TENGE, rounding=ROUND_CEILING)
+    floor = (fixed / variable_share).quantize(_TENGE, rounding=ROUND_CEILING)
+    # Each fee is rounded separately, as in calculate_margin. Their rounded
+    # sum can exceed the continuous estimate by a tiyn at the boundary.
+    while (
+        floor
+        - _money(floor * inputs.commission_percent / _HUNDRED)
+        - _money(floor * inputs.tax_percent / _HUNDRED)
+        - fixed
+    ) < 0:
+        floor += _TENGE
+    return floor
 
 
 def _money(value: Decimal) -> Decimal:

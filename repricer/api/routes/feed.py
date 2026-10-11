@@ -20,6 +20,8 @@ from loguru import logger
 from repricer.api.deps import MerchantDep, SessionDep
 from repricer.uploader import DatabaseCatalog, FeedOffer, build_feed, collect_feed_offers
 
+from repricer.uploader.sync_manager import UnsafeFeedPriceError
+
 router = APIRouter(tags=["feed"])
 
 
@@ -36,9 +38,16 @@ router = APIRouter(tags=["feed"])
 def kaspi_feed(request: Request, session: SessionDep, merchant: MerchantDep) -> Response:
     # Unfinished products (no pickup point, no price) are left out rather than
     # failing the whole feed; the dashboard lists them as blockers.
-    offers, excluded = collect_feed_offers(
-        session, merchant.merchant_id, catalog=DatabaseCatalog(session)
-    )
+    try:
+        offers, excluded = collect_feed_offers(
+            session, merchant.merchant_id, catalog=DatabaseCatalog(session)
+        )
+    except UnsafeFeedPriceError as exc:
+        # Do not expose private costs in a public endpoint.
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "прайс заблокирован: обнаружена убыточная цена; проверьте закупку и расходы в панели",
+        ) from exc
     if not offers:
         logger.error(
             "merchant={}: feed requested but nothing is publishable ({} products left out)",

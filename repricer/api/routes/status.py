@@ -17,7 +17,8 @@ from repricer.db.models import PriceHistory, Product, RepricerRule
 from repricer.db.queries import latest_changes
 from repricer.db.settings_store import settings_or_none
 from repricer.pricing import PricingStrategy
-from repricer.uploader import KASPI_TIMEZONE
+from repricer.uploader import KASPI_TIMEZONE, DatabaseCatalog, collect_feed_offers
+from repricer.uploader.sync_manager import UnsafeFeedPriceError
 
 router = APIRouter(prefix="/api/status", tags=["status"], dependencies=[ApiKeyGuard])
 
@@ -58,6 +59,12 @@ def get_status(session: SessionDep, merchant: MerchantDep) -> StatusOut:
     evaluated = [rule.last_evaluated_at for rule in rules if rule.last_evaluated_at is not None]
     shop = settings_or_none(session)
 
+    safe_feed = True
+    try:
+        collect_feed_offers(session, merchant.merchant_id, catalog=DatabaseCatalog(session))
+    except UnsafeFeedPriceError:
+        safe_feed = False
+
     return StatusOut(
         products_total=len(products),
         products_ready=ready,
@@ -73,7 +80,7 @@ def get_status(session: SessionDep, merchant: MerchantDep) -> StatusOut:
         ),
         last_run_at=max(evaluated) if evaluated else None,
         changes_today=changes_today,
-        feed_ready=ready > 0 and all(
+        feed_ready=safe_feed and ready > 0 and all(
             not product.is_active or feed_blocker(product) is None for product in products
         ),
         worker_enabled=shop.worker_enabled if shop is not None else False,

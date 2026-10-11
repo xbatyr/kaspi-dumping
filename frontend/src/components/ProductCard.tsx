@@ -75,6 +75,7 @@ export function ProductCard({ product, rule, cityName, selected, onSelect, onHis
           <span className={`ml-2 rounded px-1.5 py-0.5 text-xs ${product.on_sale ? "bg-emerald-50 text-emerald-800" : "bg-slate-100 text-slate-600"}`}>{product.on_sale ? "на продаже" : "снят с продажи"}</span>
         </p>
         <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">Цена закупки <button type="button" aria-label={`Изменить закупку ${product.sku}`} onClick={openEditor} className="editable-value min-h-9">{tenge(product.purchase_price)}</button></div>
+        {product.purchase_price == null && <p className="mt-1 text-xs font-bold text-red-600">ЗАПОЛНИТЕ ЗАКУПКУ</p>}
       </div>
       <div className="flex shrink-0 gap-1">
         <button onClick={() => setCalculating(true)} aria-label={`Расчёт маржи ${product.sku}`} title="Расчёт маржинальности" className="flex size-9 items-center justify-center rounded-md text-slate-500 hover:bg-slate-50"><Calculator className="size-4" /></button>

@@ -385,3 +385,46 @@ def test_a_failed_upload_leaves_the_old_price_in_the_database(
     session.rollback()
     assert session.scalars(select(RepricerRule)).one().current_price == Decimal(362000)
     assert session.scalar(select(func.count()).select_from(PriceHistory)) == 0
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_saved_loss_blocks_publication_even_for_paused_rule(
+    session: Session, manager_factory: Any, enabled: bool
+) -> None:
+    from repricer.uploader.sync_manager import UnsafeFeedPriceError
+    product = make_product(session, "LOSS", prices={ALMATY: 362000}, enabled=enabled)
+    product.purchase_price = Decimal(360000)
+    manager, storage = manager_factory()
+    with pytest.raises(UnsafeFeedPriceError, match="LOSS"):
+        manager.sync(session, MERCHANT, [], force=True)
+    assert storage.published == []
+
+
+def test_safe_price_uses_product_cost_overrides(session: Session, manager_factory: Any) -> None:
+    product = make_product(session, "SAFE", prices={ALMATY: 362000})
+    product.purchase_price = Decimal(300000)
+    product.commission_percent = Decimal(10)
+    product.delivery_cost = Decimal(1000)
+    from repricer.db.settings_store import load_settings
+    shop = load_settings(session)
+    shop.commission_percent = Decimal(90)
+    shop.delivery_cost = Decimal(100000)
+    manager, storage = manager_factory()
+    assert manager.sync(session, MERCHANT, [], force=True).published
+    assert len(storage.published) == 1
+
+
+def test_home_city_mode_checks_emitted_own_price_in_other_city(
+    session: Session, manager_factory: Any
+) -> None:
+    from repricer.uploader.sync_manager import UnsafeFeedPriceError
+    product = make_product(session, "LOSS", prices={ALMATY: 362000, ASTANA: 362000})
+    product.purchase_price = Decimal(300000)
+    product.base_price = Decimal(250000)
+    from repricer.db.settings_store import load_settings
+    shop = load_settings(session)
+    shop.compete_home_city_only = True
+    shop.home_city_id = ALMATY
+    manager, _ = manager_factory()
+    with pytest.raises(UnsafeFeedPriceError, match=ASTANA):
+        manager.sync(session, MERCHANT, [], force=True)

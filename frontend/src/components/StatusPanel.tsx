@@ -115,8 +115,8 @@ export function StatusPanel({ status, feedUrl }: { status: Status; feedUrl: stri
         {!status.feed_ready && (
           <p className="mt-2 flex items-start gap-1.5 text-xs text-amber-700">
             <Loader2 className="mt-0.5 size-3.5 shrink-0" />
-            Проверьте товары без склада или цены: пока есть неполные позиции,
-            ссылка не отдаёт прайс.
+            Проверьте наличие склада, цены и закупку с расходами.
+            Убыточная цена блокирует выгрузку всего прайса.
           </p>
         )}
       </div>

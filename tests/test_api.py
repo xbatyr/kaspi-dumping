@@ -1439,3 +1439,17 @@ def test_the_worker_switch_can_be_turned_off_without_other_changes(
 
     session.expire_all()
     assert session.scalars(select(ShopSettings)).one().worker_enabled is False
+
+
+def test_feed_refuses_known_loss_without_exposing_private_cost(
+    session: Session, client: TestClient
+) -> None:
+    make_product(session, "SAFE", cities={ALMATY: 362000})
+    product = make_product(session, "LOSS", cities={ALMATY: 362000})
+    product.purchase_price = Decimal(360000)
+    response = client.get("/feed/kaspi.xml")
+    assert response.status_code == 503
+    assert "убыточная" in response.json()["detail"]
+    assert "360000" not in response.text
+    assert "kaspi_catalog" not in response.text
+    assert client.get("/api/status").json()["feed_ready"] is False
