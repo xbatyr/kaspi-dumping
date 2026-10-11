@@ -100,6 +100,7 @@ export function ProductCard({ product, rule, cityName, selected, onSelect, onHis
         <div className="flex items-center justify-end gap-1 lg:justify-start"><span className="text-xs text-slate-500">Бот</span>{rule?.strategy === "manual" || !rule ? <a href={`/strategies?sku=${encodeURIComponent(product.sku)}`} className="editable-value text-xs">Настроить</a> : <ActiveToggle key={`${rule.id}:${rule.is_active}`} ruleIds={[rule.id]} isActive={rule.is_active} label={`Репрайсер для ${product.sku}`} onError={setError} />}</div>
       </Detail>
     </dl>
+    {rule?.pending_price != null && <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">Ожидает Kaspi: {tenge(rule.pending_price)}. На витрине: {tenge(market?.observed_price)}. Отправлено: {relativeTime(rule.price_requested_at ?? null)}. Следующий пересчёт начнётся после применения цены.</p>}
     <details className="mt-2 text-xs text-slate-500"><summary className="w-fit cursor-pointer py-1">Подробнее</summary><p className="mt-2 leading-5">Проверка: {relativeTime(rule?.last_evaluated_at ?? null)}. На Kaspi: {tenge(market?.observed_price)}. Маржа посчитана с учётом комиссии Kaspi, налога и доставки из настроек магазина. Автоснижение и автоповышение действуют при включённом боте товара.</p></details>
     {error && <p role="alert" className="mt-3 rounded-lg bg-rose-50 p-3 text-sm text-rose-700">{error}</p>}
     {calculating && <MarginDialog product={product} onClose={() => setCalculating(false)} />}

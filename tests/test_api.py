@@ -1324,10 +1324,24 @@ def test_an_empty_shop_is_not_feed_ready(session: Session, client: TestClient) -
         "worker_enabled": False,
         "global_strategy_configured": False,
         "test_mode": False,
+        "prices_waiting_for_kaspi": 0,
     }
 
 
 # --- Settings the owner fills in on the dashboard -----------------------------
+
+
+def test_status_counts_pending_prices_only_for_active_sale_rules(session: Session, client: TestClient) -> None:
+    product = make_product(session, "WAIT", cities={ALMATY: 362000, ASTANA: 362000})
+    product.rules[0].pending_price = Decimal(362000)
+    product.rules[1].pending_price = Decimal(362000)
+    product.rules[1].is_active = False
+    withdrawn = make_product(session, "WITHDRAWN", cities={ALMATY: 362000})
+    withdrawn.rules[0].pending_price = Decimal(362000)
+    withdrawn.availabilities[0].available = False
+    session.flush()
+
+    assert client.get("/api/status").json()["prices_waiting_for_kaspi"] == 1
 
 
 def settings_payload(**overrides: Any) -> dict[str, Any]:

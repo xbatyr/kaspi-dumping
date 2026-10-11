@@ -79,4 +79,10 @@ def get_status(session: SessionDep, merchant: MerchantDep) -> StatusOut:
         worker_enabled=shop.worker_enabled if shop is not None else False,
         global_strategy_configured=bool(shop and shop.global_strategy and shop.global_city_ids),
         test_mode=bool(shop and shop.test_mode),
+        prices_waiting_for_kaspi=sum(
+            1 for product in products if product.on_sale()
+            for rule in product.rules
+            if rule.is_active and rule.strategy is not PricingStrategy.MANUAL
+            and rule.pending_price is not None
+        ),
     )

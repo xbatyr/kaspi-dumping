@@ -158,6 +158,9 @@ Kaspi не покажет эту цену, бот не публикует её �
 
 ## Тесты
 
+Если цены не меняются, порядок диагностики и причины пропуска описаны в
+[docs/repricing-troubleshooting.md](docs/repricing-troubleshooting.md).
+
 ```bash
 TEST_DATABASE_URL=postgresql+psycopg://localhost/repricer_test pytest
 mypy repricer tests scripts alembic

@@ -17,6 +17,7 @@ from pathlib import Path
 from types import FrameType
 
 import typer
+from dotenv import load_dotenv
 from loguru import logger
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -84,5 +85,11 @@ def _configure_logging(verbose: bool) -> None:
     )
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """Load local configuration before Typer resolves environment options."""
+    load_dotenv(dotenv_path=".env", override=False)
     app()
+
+
+if __name__ == "__main__":
+    main()

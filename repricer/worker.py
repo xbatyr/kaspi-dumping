@@ -104,6 +104,10 @@ class RuleSnapshot:
     purchase_known: bool = False
     pending_price: Decimal | None = None
     configured_min_price: Decimal | None = None
+    #: The bot changed this price within the raise cooldown. Kaspi may still
+    #: show the price from before, and working from that one would take a raise
+    #: back on the very next pass, while raising is held.
+    changed_recently: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,6 +214,16 @@ class RepricingWorker:
         )
 
         outcomes = self._price_all(by_city)
+        for outcome in outcomes:
+            if outcome.skipped is not None:
+                logger.info(
+                    "sku={} city={}: repricing skipped: {} (XML target={}, Kaspi price={})",
+                    outcome.snapshot.sku,
+                    outcome.snapshot.city_id,
+                    outcome.skipped,
+                    outcome.snapshot.pending_price,
+                    (outcome.market_snapshot or {}).get("observed_price"),
+                )
         # A scrape can take minutes. The owner's current switch wins over the
         # value read at the start; _write checks it again under a row lock.
         with self._session_factory() as session:
@@ -337,12 +351,8 @@ class RepricingWorker:
                 or rule.max_price <= rule.min_price
             ):
                 continue
-            if not product.kaspi_product_id and rule.strategy not in {
-                PricingStrategy.MANUAL, PricingStrategy.FIXED_PRICE
-            }:
-                logger.warning("sku={} city={}: link a Kaspi card before automatic repricing", product.sku, rule.city_id)
-                continue
             change = changes.get((rule.product_id, rule.city_id))
+            changed_recently = change is not None and now - change.created_at < cooldown
             try:
                 if shared is not None:
                     assert shared.global_strategy is not None
@@ -366,9 +376,7 @@ class RepricingWorker:
                 # A price goes up only once it has stood for the cooldown since
                 # its last change, so a cut is not taken back on the next pass.
                 # Cuts are never held back: that would lose first place.
-                may_raise = product.auto_increase and not (
-                    change is not None and now - change.created_at < cooldown
-                )
+                may_raise = product.auto_increase and not changed_recently
                 config = replace(config,
                     auto_decrease=product.auto_decrease,
                     auto_increase=may_raise,
@@ -391,6 +399,13 @@ class RepricingWorker:
                     exc,
                 )
                 continue
+            # The strategy that applies, not the rule's own: the shared one
+            # overrides it, and a card is what the market is read from.
+            if not product.kaspi_product_id and config.strategy not in {
+                PricingStrategy.MANUAL, PricingStrategy.FIXED_PRICE
+            }:
+                logger.warning("sku={} city={}: link a Kaspi card before automatic repricing", product.sku, rule.city_id)
+                continue
             snapshots.append(
                 RuleSnapshot(
                     rule_id=rule.id,
@@ -411,6 +426,7 @@ class RepricingWorker:
                         and rule.current_price is not None
                         and rule.current_price != change.new_price
                     ),
+                    changed_recently=changed_recently and rule.current_price is not None,
                 )
             )
         return snapshots, shop.test_mode
@@ -480,12 +496,15 @@ class RepricingWorker:
             # Work from the price shoppers see, as AlgaTop does. The price in our
             # own feed can be stale (another tool or the cabinet changed it, or
             # Kaspi has not fetched the feed yet), and a decision to keep the
-            # price must keep that one, not snap back to ours. A price the owner
-            # set by hand is the exception: Kaspi shows the old one for up to an
-            # hour, and keeping that would quietly undo the owner's change.
+            # price must keep that one, not snap back to ours. Two exceptions,
+            # both because Kaspi shows the old price for up to an hour: a price
+            # the owner set by hand, and one the bot itself set within the
+            # cooldown. Keeping the old price would quietly undo either change.
             current = (
                 own_offer.price
-                if own_offer is not None and not snapshot.price_set_by_hand
+                if own_offer is not None
+                and not snapshot.price_set_by_hand
+                and not snapshot.changed_recently
                 else snapshot.current_price
             )
             decision = self._engine.evaluate(snapshot.config, competitors, current_price=current)

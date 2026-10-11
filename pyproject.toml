@@ -11,13 +11,14 @@ dependencies = [
     "typer>=0.12",
     "fastapi>=0.115",
     "pydantic-settings>=2.4",
+    "python-dotenv>=1.0",
     "uvicorn>=0.30",
     "alembic>=1.13",
     "openpyxl>=3.1",
 ]
 
 [project.scripts]
-repricer = "repricer.cli:app"
+repricer = "repricer.cli:main"
 repricer-bot = "repricer.telegram.cli:app"
 
 [project.optional-dependencies]

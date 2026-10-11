@@ -6,6 +6,7 @@ import os
 from logging.config import fileConfig
 
 from alembic import context
+from dotenv import load_dotenv
 from sqlalchemy import engine_from_config, pool
 
 from repricer.db import Base
@@ -14,6 +15,7 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
+load_dotenv(dotenv_path=".env", override=False)
 database_url = os.environ.get("DATABASE_URL") or config.get_main_option("sqlalchemy.url")
 if not database_url:
     raise RuntimeError("set DATABASE_URL (or sqlalchemy.url in alembic.ini) before migrating")
