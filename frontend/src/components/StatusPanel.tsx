@@ -64,7 +64,7 @@ export function StatusPanel({ status, feedUrl }: { status: Status; feedUrl: stri
           <div className="mt-4 rounded-lg bg-amber-50 p-3">
             <p className="flex items-center gap-1.5 text-sm font-medium text-amber-900">
               <AlertTriangle className="size-4" />
-              Прайс временно недоступен из-за этих товаров
+              Эти товары не входят в прайс
             </p>
             <ul className="mt-1.5 space-y-0.5 text-sm text-amber-800">
               {blockers.map(([reason, count]) => (
@@ -77,6 +77,7 @@ export function StatusPanel({ status, feedUrl }: { status: Status; feedUrl: stri
         )}
 
         {status.worker_enabled && status.test_mode && <p className="mt-3 rounded-lg bg-sky-50 p-3 text-sm text-sky-900">🧪 Тестовый режим: предложения приходят в Telegram с кнопками «Подтвердить» и «Отклонить». XML меняется только после подтверждения владельцем. Снять галочку в настройках — применять новые расчёты автоматически.</p>}
+        {(status.prices_waiting_for_kaspi ?? 0) > 0 && <p className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">Ожидают применения на Kaspi: {status.prices_waiting_for_kaspi} цен. До совпадения цены на витрине с XML бот пропускает их пересчёт. Проверьте автоматическую загрузку прайса в кабинете Kaspi.</p>}
         {!status.worker_enabled && <p className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">Бот выключен в настройках магазина. Цены сейчас не пересчитываются.</p>}
         {!status.global_strategy_configured && <p className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">Общая стратегия не сохранена. Настройте её во вкладке «Стратегии».</p>}
         {status.global_strategy_configured && status.rules_active === 0 && <p className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">Нет товаров с включённым демпингом. Задайте Min/Max для товаров во вкладке «Стратегии».</p>}
@@ -114,8 +115,8 @@ export function StatusPanel({ status, feedUrl }: { status: Status; feedUrl: stri
         {!status.feed_ready && (
           <p className="mt-2 flex items-start gap-1.5 text-xs text-amber-700">
             <Loader2 className="mt-0.5 size-3.5 shrink-0" />
-            Проверьте товары без склада или цены: пока есть неполные позиции,
-            ссылка не отдаёт прайс.
+            Проверьте наличие склада, цены и закупку с расходами.
+            Убыточная цена блокирует выгрузку всего прайса.
           </p>
         )}
       </div>

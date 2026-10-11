@@ -1084,6 +1084,70 @@ def test_a_price_goes_up_only_once_it_has_stood_for_two_hours(
     assert product.rules[0].current_price == Decimal(expected)
 
 
+@pytest.mark.parametrize(("left", "raised"), [(["luxe"], 520000), ([], 462999)],
+                         ids=["alone-to-max", "under-the-next-store"])
+def test_a_raise_is_not_taken_back_before_kaspi_fetches_the_feed(
+    session: Session, build_worker: Any, left: list[str], raised: int
+) -> None:
+    # The raise went to the feed, but for up to an hour Kaspi still shows
+    # 462 900. Working from that during the cooldown put the old price back on
+    # the next pass, so no raise ever lasted.
+    product = make_product(session, "PC", IPHONE, cities={ALMATY: 462900},
+                           min_price=400000, max_price=520000)
+    product.auto_increase = True
+    session.flush()
+    offers = [offer for offer in card_from_the_screenshot() if offer.merchant_id not in left]
+    worker, storage, _ = build_worker(FakeKaspiClient({(IPHONE, ALMATY): offers}))
+
+    with worker:
+        first = worker.run_once()
+        second = worker.run_once()
+
+    session.expire_all()
+    assert product.rules[0].current_price == Decimal(raised)
+    assert (first.changed, second.changed) == (1, 0)
+    assert len(storage.published) == 1
+
+
+def test_a_stale_kaspi_price_does_not_raise_during_the_cooldown(
+    session: Session, build_worker: Any
+) -> None:
+    # Cut to 459 999 ten minutes ago; Kaspi still shows 462 900, and the local
+    # rival has since gone up. Taking Kaspi's old price would be a raise.
+    product = make_product(session, "PC", IPHONE, cities={ALMATY: 459999},
+                           min_price=400000, max_price=520000)
+    product.auto_increase = True
+    changed_at(session, product, 459999, timedelta(minutes=10))
+    offers = [*card_from_the_screenshot(), replace(competitor("local", 470000), intercity=False)]
+    worker, storage, _ = build_worker(FakeKaspiClient({(IPHONE, ALMATY): offers}))
+
+    with worker:
+        worker.run_once()
+
+    session.expire_all()
+    assert product.rules[0].current_price == Decimal(459999)
+    assert storage.published == []
+
+
+def test_a_rule_without_a_card_is_not_scraped_under_the_shared_strategy(
+    session: Session, build_worker: Any
+) -> None:
+    # The rule itself says «фиксированная цена», but the shared strategy is
+    # what applies, and it needs the card to read the market from.
+    make_product(session, "NOCARD", "", strategy=PricingStrategy.FIXED_PRICE, base_price=400000)
+    shop = load_settings(session)
+    shop.global_strategy = PricingStrategy.BEAT_FIRST
+    shop.global_city_ids = [ALMATY]
+    session.flush()
+    worker, _, client = build_worker(FakeKaspiClient({}))
+
+    with worker:
+        report = worker.run_once()
+
+    assert client.calls == []
+    assert report.evaluated == 0
+
+
 def test_a_cut_is_never_held_back_by_the_cooldown(session: Session, build_worker: Any) -> None:
     product = make_product(session, "PC", IPHONE, cities={ALMATY: 462900},
                            min_price=400000, max_price=520000)

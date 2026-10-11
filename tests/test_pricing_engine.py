@@ -581,11 +581,17 @@ def test_target_position_one_is_beat_first() -> None:
     assert engine.evaluate(config(TARGET, target_position=1), offers).new_price == 1499
 
 
-def test_target_position_deeper_than_the_market_keeps_the_price() -> None:
-    decision = engine.evaluate(config(TARGET, target_position=5), [offer("a", 1500)], Decimal(1800))
+@pytest.mark.parametrize(("raising", "expected"), [(False, 1800), (True, 5000)])
+def test_target_position_deeper_than_the_market_takes_the_margin(
+    raising: bool, expected: int
+) -> None:
+    settings = replace(config(TARGET, target_position=5), auto_increase=raising, raise_when_first=raising)
 
-    # Only one competitor, so any price we set already sits at position 2 or better.
-    assert decision.new_price == 1800
+    decision = engine.evaluate(settings, [offer("a", 1500)], Decimal(1800))
+
+    # Only one competitor, so any price we set already sits at position 2 or
+    # better: with raising allowed that is max_price, otherwise the price stays.
+    assert decision.new_price == expected
     assert decision.reason is DecisionReason.STRATEGY_TARGET
     assert decision.reference_offer is None
 

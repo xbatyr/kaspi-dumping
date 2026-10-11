@@ -143,3 +143,12 @@ def test_unusable_input_is_refused(overrides: dict[str, Decimal]) -> None:
 def test_money_must_be_a_decimal(price: object) -> None:
     with pytest.raises(TypeError):
         inputs(price=price)
+
+
+def test_break_even_covers_separately_rounded_fees() -> None:
+    values = inputs(purchase_price=Decimal("682.66"), delivery_cost=Decimal("47.85"),
+                    tax_percent=Decimal("16.05"), commission_percent=Decimal("33.57"))
+    assert break_even_price(values) == Decimal(1451)
+    assert calculate_margin(inputs(price=Decimal(1451), purchase_price=values.purchase_price,
+        delivery_cost=values.delivery_cost, tax_percent=values.tax_percent,
+        commission_percent=values.commission_percent)).profit >= 0

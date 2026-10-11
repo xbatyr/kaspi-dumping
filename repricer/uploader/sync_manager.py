@@ -26,9 +26,9 @@ from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from repricer.db.models import PriceHistory, Product, RepricerRule
+from repricer.db.models import PriceHistory, Product, RepricerRule, ShopSettings
 from repricer.db.settings_store import settings_or_none
-from repricer.pricing import PricingDecision
+from repricer.pricing import PricingDecision, calculate_margin
 from repricer.uploader.feed_builder import (
     KASPI_TIMEZONE,
     Availability,
@@ -67,6 +67,10 @@ class ExcludedOffer:
 class Catalog:
     items: tuple[CatalogItem, ...]
     excluded: tuple[ExcludedOffer, ...] = ()
+
+
+class UnsafeFeedPriceError(ValueError):
+    """Refuse the entire feed rather than publish a known loss or remove stock."""
 
 
 class CatalogSource(Protocol):
@@ -272,6 +276,14 @@ def collect_feed_offers(
     prices = current_prices(session, merchant_id)
     shop = settings_or_none(session)
     home_city = shop.competing_city_id if shop is not None else None
+    margin_settings = shop or ShopSettings()
+    products = {
+        product.sku: product
+        for product in session.scalars(
+            select(Product).where(Product.merchant_id == merchant_id, Product.is_active)
+        )
+    }
+    unsafe: list[str] = []
     offers: list[FeedOffer] = []
     excluded = list(loaded.excluded)
     for item in loaded.items:
@@ -307,11 +319,27 @@ def collect_feed_offers(
             # shop's feed, any more than a missing pickup point does.
             excluded.append(ExcludedOffer(item.sku, str(exc)))
             continue
+        product = products.get(item.sku)
+        if product is not None and product.purchase_price is not None and any(
+            stock.available and (stock.stock_count is None or stock.stock_count > 0)
+            for stock in item.availabilities
+        ):
+            emitted_prices = city_prices or {"base": base_price}
+            for city_id, price in emitted_prices.items():
+                margin = calculate_margin(margin_settings.margin_inputs(price, product))
+                if margin.profit < 0:
+                    unsafe.append(
+                        f"{item.sku}/{city_id}: price={price}, "
+                        f"break_even={margin.break_even_price}"
+                    )
         offers.append(feed_offer)
     for offer in excluded:
         logger.warning(
             "merchant={}: offer {} left out of the feed: {}", merchant_id, offer.sku, offer.reason
         )
+    if unsafe:
+        logger.error("merchant={}: feed blocked by known losses: {}", merchant_id, "; ".join(unsafe))
+        raise UnsafeFeedPriceError("прайс заблокирован: цены ниже безубыточности: " + "; ".join(unsafe))
     return offers, tuple(excluded)
 
 

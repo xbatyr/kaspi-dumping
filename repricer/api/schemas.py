@@ -804,6 +804,8 @@ class StatusOut(BaseModel):
     global_strategy_configured: bool
     #: Prices are worked out and announced, never written.
     test_mode: bool = False
+    #: Active sale rules whose XML target has not yet been observed on Kaspi.
+    prices_waiting_for_kaspi: int = 0
 
 
 class ProductCardOut(BaseModel):

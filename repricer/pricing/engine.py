@@ -124,8 +124,10 @@ class PricingEngine:
 
         target, reference = _strategy_target(config, competitors, own_rating)
         if target is None:
-            # Fewer stores than the place we aim for: we hold it at any price.
-            return decide(hold(), DecisionReason.STRATEGY_TARGET, None)
+            # Fewer stores than the place we aim for: we hold it at any price,
+            # so with raising allowed that price is max_price, as when alone.
+            deep = config.ceiling_price if config.auto_increase else hold()
+            return decide(deep, DecisionReason.STRATEGY_TARGET, None)
         if target >= config.floor_price:
             return decide(target, DecisionReason.STRATEGY_TARGET, reference)
         # The store to beat sells below our floor. Stay where we are, or with

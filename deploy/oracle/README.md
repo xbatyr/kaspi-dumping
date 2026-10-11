@@ -73,7 +73,7 @@ sudo docker compose ps
 логин и пароль из `.env`. Фид доступен Kaspi без пароля. Проверка:
 
 ```bash
-curl -I https://kaspi-repricer.duckdns.org/feed/kaspi.xml
+curl --fail --silent --show-error -o /dev/null -w '%{http_code}\n' https://kaspi-repricer.duckdns.org/feed/kaspi.xml
 curl -I https://kaspi-repricer.duckdns.org/
 ```
 

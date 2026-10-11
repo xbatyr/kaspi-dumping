@@ -37,6 +37,9 @@ export interface Rule {
   ignored_merchants: string[];
   is_active: boolean;
   current_price: Money | null;
+  pending_price?: Money | null;
+  price_requested_at?: string | null;
+  price_confirmed_at?: string | null;
   last_evaluated_at: string | null;
   market_snapshot?: { position: number | null; offer_count: number; observed_price: Money | null; leader_price: Money; leader_name?: string; leader_merchant_id?: string; expected_position: number } | null;
   last_change: RuleStatus | null;
@@ -297,6 +300,7 @@ export interface Status {
   worker_enabled: boolean;
   global_strategy_configured: boolean;
   test_mode: boolean;
+  prices_waiting_for_kaspi?: number;
 }
 
 export interface HistoryEntry {

@@ -1,4 +1,6 @@
 from collections.abc import Iterator
+import os
+from pathlib import Path
 
 import pytest
 from loguru import logger
@@ -6,8 +8,26 @@ from sqlalchemy import Engine
 from typer.testing import CliRunner
 
 from repricer.cli import app
+from repricer.cli import main
 
 runner = CliRunner()
+
+
+@pytest.mark.parametrize("existing", [None, "postgresql://server/production"])
+def test_entry_point_reads_dotenv_before_resolving_cli_options(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, existing: str | None
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    if existing is not None:
+        monkeypatch.setenv("DATABASE_URL", existing)
+    (tmp_path / ".env").write_text("DATABASE_URL=postgresql://localhost/local\n")
+    resolved: list[str | None] = []
+    monkeypatch.setattr("repricer.cli.app", lambda: resolved.append(os.getenv("DATABASE_URL")))
+
+    main()
+
+    assert resolved == [existing or "postgresql://localhost/local"]
 
 
 @pytest.fixture(autouse=True)

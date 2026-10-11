@@ -75,6 +75,7 @@ export function ProductCard({ product, rule, cityName, selected, onSelect, onHis
           <span className={`ml-2 rounded px-1.5 py-0.5 text-xs ${product.on_sale ? "bg-emerald-50 text-emerald-800" : "bg-slate-100 text-slate-600"}`}>{product.on_sale ? "на продаже" : "снят с продажи"}</span>
         </p>
         <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">Цена закупки <button type="button" aria-label={`Изменить закупку ${product.sku}`} onClick={openEditor} className="editable-value min-h-9">{tenge(product.purchase_price)}</button></div>
+        {product.purchase_price == null && <p className="mt-1 text-xs font-bold text-red-600">ЗАПОЛНИТЕ ЗАКУПКУ</p>}
       </div>
       <div className="flex shrink-0 gap-1">
         <button onClick={() => setCalculating(true)} aria-label={`Расчёт маржи ${product.sku}`} title="Расчёт маржинальности" className="flex size-9 items-center justify-center rounded-md text-slate-500 hover:bg-slate-50"><Calculator className="size-4" /></button>
@@ -100,6 +101,7 @@ export function ProductCard({ product, rule, cityName, selected, onSelect, onHis
         <div className="flex items-center justify-end gap-1 lg:justify-start"><span className="text-xs text-slate-500">Бот</span>{rule?.strategy === "manual" || !rule ? <a href={`/strategies?sku=${encodeURIComponent(product.sku)}`} className="editable-value text-xs">Настроить</a> : <ActiveToggle key={`${rule.id}:${rule.is_active}`} ruleIds={[rule.id]} isActive={rule.is_active} label={`Репрайсер для ${product.sku}`} onError={setError} />}</div>
       </Detail>
     </dl>
+    {rule?.pending_price != null && <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">Ожидает Kaspi: {tenge(rule.pending_price)}. На витрине: {tenge(market?.observed_price)}. Отправлено: {relativeTime(rule.price_requested_at ?? null)}. Следующий пересчёт начнётся после применения цены.</p>}
     <details className="mt-2 text-xs text-slate-500"><summary className="w-fit cursor-pointer py-1">Подробнее</summary><p className="mt-2 leading-5">Проверка: {relativeTime(rule?.last_evaluated_at ?? null)}. На Kaspi: {tenge(market?.observed_price)}. Маржа посчитана с учётом комиссии Kaspi, налога и доставки из настроек магазина. Автоснижение и автоповышение действуют при включённом боте товара.</p></details>
     {error && <p role="alert" className="mt-3 rounded-lg bg-rose-50 p-3 text-sm text-rose-700">{error}</p>}
     {calculating && <MarginDialog product={product} onClose={() => setCalculating(false)} />}
